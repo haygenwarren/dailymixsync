@@ -1,0 +1,161 @@
+{
+  "note": "Offline stand-in for Apple Music catalog search. Entries are written the way Apple Music typically formats titles, but the IDs are made up (mock-*) and durations are approximate. Wrong answers are listed before right ones on purpose: the matcher has to earn each pick.",
+  "songs": [
+    {
+      "id": "mock-1001",
+      "title": "Mr. Brightside (Jacques Lu Cont's Thin White Duke Remix)",
+      "artist": "The Killers",
+      "album": "Hot Fuss (Deluxe Edition)",
+      "duration_ms": 528000
+    },
+    {
+      "id": "mock-1002",
+      "title": "Mr. Brightside",
+      "artist": "Vitamin String Quartet",
+      "album": "VSQ Performs The Killers",
+      "duration_ms": 233000
+    },
+    {
+      "id": "mock-1003",
+      "title": "Mr. Brightside",
+      "artist": "The Killers",
+      "album": "Hot Fuss",
+      "duration_ms": 222973
+    },
+
+    {
+      "id": "mock-2001",
+      "title": "Bohemian Rhapsody (Live at Wembley Stadium, July 1986)",
+      "artist": "Queen",
+      "album": "Live at Wembley Stadium",
+      "duration_ms": 305000
+    },
+    {
+      "id": "mock-2002",
+      "title": "Bohemian Rhapsody",
+      "artist": "Queen",
+      "album": "Greatest Hits",
+      "duration_ms": 357000
+    },
+    {
+      "id": "mock-2003",
+      "title": "Bohemian Rhapsody",
+      "artist": "Queen",
+      "album": "A Night at the Opera (Deluxe Edition) [2011 Remaster]",
+      "duration_ms": 354320
+    },
+
+    {
+      "id": "mock-3001",
+      "title": "This Is What You Came For (feat. Rihanna) [Dillon Francis Remix]",
+      "artist": "Calvin Harris",
+      "album": "This Is What You Came For (feat. Rihanna) [Remixes] - EP",
+      "duration_ms": 241000
+    },
+    {
+      "id": "mock-3002",
+      "title": "This Is What You Came For (feat. Rihanna)",
+      "artist": "Calvin Harris",
+      "album": "This Is What You Came For (feat. Rihanna) - Single",
+      "duration_ms": 222160
+    },
+
+    {
+      "id": "mock-4001",
+      "title": "deja vu",
+      "artist": "Olivia Rodrigo",
+      "album": "SOUR",
+      "duration_ms": 215000
+    },
+    {
+      "id": "mock-4002",
+      "title": "Déjà Vu (feat. JAY Z)",
+      "artist": "Beyoncé",
+      "album": "B'Day (Deluxe Edition)",
+      "duration_ms": 239500
+    },
+
+    {
+      "id": "mock-5001",
+      "title": "Hotel California (Live)",
+      "artist": "Eagles",
+      "album": "Hell Freezes Over",
+      "duration_ms": 432000
+    },
+    {
+      "id": "mock-5002",
+      "title": "Hotel California",
+      "artist": "Eagles",
+      "album": "Hotel California",
+      "duration_ms": 391376
+    },
+
+    {
+      "id": "mock-6001",
+      "title": "Everlong",
+      "artist": "Foo Fighters",
+      "album": "The Colour and the Shape",
+      "duration_ms": 250546
+    },
+    {
+      "id": "mock-6002",
+      "title": "Everlong (Acoustic Version)",
+      "artist": "Foo Fighters",
+      "album": "Greatest Hits",
+      "duration_ms": 250000
+    },
+
+    {
+      "id": "mock-7001",
+      "title": "Killing In the Name",
+      "artist": "Rage Against the Machine",
+      "album": "Rage Against the Machine",
+      "duration_ms": 313573
+    },
+
+    {
+      "id": "mock-8001",
+      "title": "Let It Go",
+      "artist": "James Bay",
+      "album": "Chaos and the Calm",
+      "duration_ms": 261000
+    },
+    {
+      "id": "mock-8002",
+      "title": "Let It Go",
+      "artist": "Idina Menzel",
+      "album": "Frozen (Original Motion Picture Soundtrack)",
+      "duration_ms": 223840
+    },
+
+    {
+      "id": "mock-9001",
+      "title": "Creep (Acoustic)",
+      "artist": "Radiohead",
+      "album": "My Iron Lung - EP",
+      "duration_ms": 259000
+    },
+    {
+      "id": "mock-9002",
+      "title": "Creep",
+      "artist": "Scala & Kolacny Brothers",
+      "album": "Scala & Kolacny Brothers",
+      "duration_ms": 279000
+    },
+
+    {
+      "id": "mock-1101",
+      "title": "Dreams (Live)",
+      "artist": "Fleetwood Mac",
+      "album": "The Dance",
+      "duration_ms": 279000
+    },
+    {
+      "id": "mock-1102",
+      "title": "Dreams",
+      "artist": "Fleetwood Mac",
+      "album": "Rumours",
+      "duration_ms": 257800
+    }
+  ]
+}

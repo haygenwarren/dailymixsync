@@ -1,0 +1,30 @@
+# --- Secrets and local config: never commit -------------------------------
+config.json
+.env
+.env.*
+secrets/
+*.p8
+*.pem
+*.key
+*.token
+tokens.json
+
+# --- Local data: mapping cache, Spotify exports ---------------------------
+data/*
+!data/.gitkeep
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+
+# --- Python ---------------------------------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# --- macOS ----------------------------------------------------------------
+.DS_Store

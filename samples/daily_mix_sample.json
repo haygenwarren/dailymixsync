@@ -1,0 +1,91 @@
+{
+  "note": "Hand-written sample in the format the Spotify browser helper will export. Song metadata is written the way Spotify typically formats it; the Spotify IDs are placeholders, not real track IDs.",
+  "playlist_name": "Daily Mix 1 (sample)",
+  "tracks": [
+    {
+      "title": "Mr. Brightside",
+      "artist": "The Killers",
+      "album": "Hot Fuss",
+      "duration_ms": 222000,
+      "spotify_track_id": "SAMPLE0000000000000001",
+      "spotify_url": "https://open.spotify.com/track/SAMPLE0000000000000001"
+    },
+    {
+      "title": "Bohemian Rhapsody - Remastered 2011",
+      "artist": "Queen",
+      "album": "A Night At The Opera (2011 Remaster)",
+      "duration_ms": 354000,
+      "spotify_track_id": "SAMPLE0000000000000002",
+      "spotify_url": "https://open.spotify.com/track/SAMPLE0000000000000002"
+    },
+    {
+      "title": "This Is What You Came For",
+      "artist": "Calvin Harris, Rihanna",
+      "album": "This Is What You Came For",
+      "duration_ms": 222000,
+      "spotify_track_id": "SAMPLE0000000000000003",
+      "spotify_url": "https://open.spotify.com/track/SAMPLE0000000000000003"
+    },
+    {
+      "title": "Déjà Vu",
+      "artist": "Beyoncé, JAY-Z",
+      "album": "B'Day Deluxe Edition",
+      "duration_ms": 240000,
+      "spotify_track_id": "SAMPLE0000000000000004",
+      "spotify_url": "https://open.spotify.com/track/SAMPLE0000000000000004"
+    },
+    {
+      "title": "Hotel California - 2013 Remaster",
+      "artist": "Eagles",
+      "album": "Hotel California (2013 Remaster)",
+      "duration_ms": 391000,
+      "spotify_track_id": "SAMPLE0000000000000005",
+      "spotify_url": "https://open.spotify.com/track/SAMPLE0000000000000005"
+    },
+    {
+      "title": "Everlong - Acoustic Version",
+      "artist": "Foo Fighters",
+      "album": "Greatest Hits",
+      "duration_ms": 250000,
+      "spotify_url": "https://open.spotify.com/track/SAMPLE0000000000000006"
+    },
+    {
+      "title": "Killing In The Name",
+      "artist": "Rage Against The Machine",
+      "album": "Rage Against The Machine - XX (20th Anniversary Special Edition)",
+      "duration_ms": 313000
+    },
+    {
+      "title": "Let It Go - From \"Frozen\"/Soundtrack Version",
+      "artist": "Idina Menzel",
+      "album": "Frozen (Original Motion Picture Soundtrack)",
+      "duration_ms": 224000,
+      "spotify_track_id": "SAMPLE0000000000000008",
+      "spotify_url": "https://open.spotify.com/track/SAMPLE0000000000000008"
+    },
+    {
+      "title": "Creep",
+      "artist": "Radiohead",
+      "album": "Pablo Honey",
+      "duration_ms": 238000,
+      "spotify_track_id": "SAMPLE0000000000000009",
+      "spotify_url": "https://open.spotify.com/track/SAMPLE0000000000000009"
+    },
+    {
+      "title": "A Song Apple Music Does Not Have",
+      "artist": "The Missing Artists",
+      "album": "Unreleased",
+      "duration_ms": 180000,
+      "spotify_track_id": "SAMPLE0000000000000010",
+      "spotify_url": "https://open.spotify.com/track/SAMPLE0000000000000010"
+    },
+    {
+      "title": "Dreams",
+      "artist": "Fleetwood Mac",
+      "album": null,
+      "duration_ms": null,
+      "spotify_track_id": "SAMPLE0000000000000011",
+      "spotify_url": "https://open.spotify.com/track/SAMPLE0000000000000011"
+    }
+  ]
+}
