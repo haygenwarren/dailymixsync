@@ -15,7 +15,7 @@ SONGS = [
 
 
 def ids(results):
-    return [song.catalog_id for song in results]
+    return [song.persistent_id for song in results]
 
 
 def test_search_returns_the_wrong_versions_too_in_fixture_order():

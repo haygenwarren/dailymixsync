@@ -41,9 +41,15 @@ def test_overrides(tmp_path):
         )
     )
     assert settings.database_path == Path("elsewhere/cache.sqlite3")
+    assert settings.managed_playlist_prefix == "Spotify Daily Mix"
     assert settings.matching.auto_accept_threshold == 95
     assert settings.matching.review_threshold == 75
     assert settings.matching.flag_penalties == {**DEFAULT_FLAG_PENALTIES, "live": 50}
+
+
+def test_managed_playlist_prefix_can_be_changed(tmp_path):
+    settings = load_settings(write(tmp_path, {"managed_playlist_prefix": "Mirror"}))
+    assert settings.managed_playlist_prefix == "Mirror"
 
 
 def test_missing_explicit_config_file(tmp_path):
@@ -64,6 +70,9 @@ def test_missing_explicit_config_file(tmp_path):
         ({"matching": {"flag_penalties": {"liev": 1}}}, "unknown flag_penalties keys"),
         ({"search_limit": 0}, "search_limit must be"),
         ({"search_limit": "ten"}, "search_limit must be"),
+        ({"managed_playlist_prefix": ""}, "managed_playlist_prefix must be"),
+        ({"managed_playlist_prefix": " Spotify Daily Mix"}, "managed_playlist_prefix must be"),
+        ({"managed_playlist_prefix": 7}, "managed_playlist_prefix must be"),
     ],
 )
 def test_invalid_config_is_explained(tmp_path, payload, message):

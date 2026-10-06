@@ -57,7 +57,7 @@ def store(tmp_path):
 def test_first_run_picks_the_right_candidate_for_every_sample_track(playlist, catalog, store):
     results = match_playlist(playlist, catalog, store, Settings())
     decided = {
-        r.track.title: (r.status, r.best.candidate.catalog_id if r.best else None)
+        r.track.title: (r.status, r.best.candidate.persistent_id if r.best else None)
         for r in results
     }
     assert decided == EXPECTED
@@ -70,7 +70,7 @@ def test_only_automatic_matches_are_stored(playlist, catalog, store):
     for result in results:
         mapping = store.get(source_key(result.track))
         if result.status is MatchStatus.MATCHED:
-            assert mapping.apple_catalog_id == result.best.candidate.catalog_id
+            assert mapping.persistent_id == result.best.candidate.persistent_id
             assert mapping.score == result.best.score
             assert mapping.method == AUTO
         else:
@@ -92,7 +92,7 @@ def test_second_run_reuses_stored_mappings_without_searching(playlist, catalog, 
     assert len(catalog.terms) == len(playlist.tracks) - MATCHED
     for result in results:
         if result.status is MatchStatus.CACHED:
-            assert result.mapping.apple_catalog_id == EXPECTED[result.track.title][1]
+            assert result.mapping.persistent_id == EXPECTED[result.track.title][1]
 
 
 def test_manual_mapping_takes_priority_and_is_left_alone(playlist, catalog, store):
@@ -103,7 +103,7 @@ def test_manual_mapping_takes_priority_and_is_left_alone(playlist, catalog, stor
     results = match_playlist(playlist, catalog, store, Settings())
     result = next(r for r in results if r.track.title == "Creep")
     assert result.status is MatchStatus.CACHED
-    assert result.mapping.apple_catalog_id == "mock-9001"
+    assert result.mapping.persistent_id == "mock-9001"
     assert result.mapping.is_manual
     assert "creep radiohead" not in catalog.terms
     assert store.get(source_key(creep)).method == MANUAL

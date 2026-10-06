@@ -23,9 +23,9 @@ class SourceTrack:
 
 @dataclass(frozen=True)
 class AppleCandidate:
-    """One song returned by an Apple Music catalog search."""
+    """One track Music can put in a playlist, as returned by a search."""
 
-    catalog_id: str
+    persistent_id: str  # Music's persistent ID for the track (made up in the mock)
     title: str
     artist: str
     album: str = ""
@@ -35,10 +35,10 @@ class AppleCandidate:
 
 @dataclass(frozen=True)
 class Mapping:
-    """A remembered source track -> Apple Music catalog song decision."""
+    """A remembered source track -> Music track decision."""
 
     source_key: str
-    apple_catalog_id: str
+    persistent_id: str
     score: float
     matched_at: str  # ISO-8601 UTC, when this pairing was first stored
     method: str  # AUTO or MANUAL

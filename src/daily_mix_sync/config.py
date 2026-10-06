@@ -1,7 +1,7 @@
 """Settings: built-in defaults, optionally overridden by a JSON config file.
 
-See config.example.json for every available key. Credentials do not belong in
-this file; they will come from environment variables or ignored key files.
+See config.example.json for every available key. No credentials are involved:
+Music is driven locally, signed in as whoever is using this Mac.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .matcher import MatchConfig
+from .music_app import DEFAULT_MANAGED_PREFIX
 
 DEFAULT_CONFIG_PATH = Path("config.json")
 
@@ -23,7 +24,9 @@ class ConfigError(Exception):
 @dataclass(frozen=True)
 class Settings:
     database_path: Path = Path("data/mappings.sqlite3")
-    search_limit: int = 10  # candidates requested per catalog search
+    search_limit: int = 10  # candidates requested per search
+    # Only playlists named this, or this plus a space and more, are ever changed.
+    managed_playlist_prefix: str = DEFAULT_MANAGED_PREFIX
     matching: MatchConfig = field(default_factory=MatchConfig)
 
 
@@ -58,9 +61,15 @@ def load_settings(path: Path | None = None) -> Settings:
         search_limit = raw.get("search_limit", Settings.search_limit)
         if isinstance(search_limit, bool) or not isinstance(search_limit, int) or search_limit < 1:
             raise ValueError("search_limit must be a whole number >= 1")
+        prefix = raw.get("managed_playlist_prefix", Settings.managed_playlist_prefix)
+        if not isinstance(prefix, str) or not prefix or prefix != prefix.strip():
+            raise ValueError(
+                "managed_playlist_prefix must be non-empty text without outer spaces"
+            )
         return Settings(
             database_path=Path(raw.get("database_path", Settings.database_path)),
             search_limit=search_limit,
+            managed_playlist_prefix=prefix,
             matching=MatchConfig(**matching),
         )
     except (TypeError, ValueError) as exc:

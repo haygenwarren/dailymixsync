@@ -25,3 +25,6 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "music_app: drives the real Music app on this Mac; only run with --music-app",
+]

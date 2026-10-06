@@ -131,12 +131,12 @@ def test_studio_version_wins_over_live_version_listed_first():
         [cand("Song (Live)", album="Live in Concert", seconds=262, id="live"), cand(id="studio")],
     )
     assert result.status is MatchStatus.MATCHED
-    assert result.best.candidate.catalog_id == "studio"
+    assert result.best.candidate.persistent_id == "studio"
 
 
 def test_live_source_picks_the_live_candidate():
     result = match_track(src("Song - Live"), [cand(id="studio"), cand("Song (Live)", id="live")])
-    assert result.best.candidate.catalog_id == "live"
+    assert result.best.candidate.persistent_id == "live"
 
 
 def test_different_remixes_are_not_matched_automatically():
@@ -223,8 +223,8 @@ def test_correct_artist_is_picked_among_same_titled_songs():
         ],
     )
     assert result.status is MatchStatus.MATCHED
-    assert result.best.candidate.catalog_id == "right"
-    assert [c.candidate.catalog_id for c in result.candidates][0] == "right"
+    assert result.best.candidate.persistent_id == "right"
+    assert [c.candidate.persistent_id for c in result.candidates][0] == "right"
     assert result.candidates[0].score > result.candidates[1].score
 
 
@@ -239,7 +239,7 @@ def test_no_candidates_fails():
 
 def test_equal_scores_keep_catalog_order():
     result = match_track(src(), [cand(id="first"), cand(id="second")])
-    assert [c.candidate.catalog_id for c in result.candidates] == ["first", "second"]
+    assert [c.candidate.persistent_id for c in result.candidates] == ["first", "second"]
 
 
 def test_default_thresholds():

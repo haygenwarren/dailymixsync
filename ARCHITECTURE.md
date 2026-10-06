@@ -1,7 +1,8 @@
 # Architecture
 
-One Python package, one SQLite file, no services. Each stage is a module with plain
-functions and dataclasses, so any stage can be run and tested on its own.
+One Python package, one SQLite file, no services, no credentials. Each stage is a
+module with plain functions and dataclasses, so any stage can be run and tested on
+its own. Apple Music is reached only by driving the Music app on this Mac.
 
 ## Pipeline
 
@@ -12,27 +13,31 @@ playlist export (JSON)            importer.py     validate, drop duplicates
    SourceTrack ──► normalization  normalize.py    base title, flags, qualifiers, artists
         │
         ▼
-   cache lookup                   database.py     source key → stored mapping?
+   cache lookup                   database.py     source key → stored Music track?
         │ miss                         └── hit ──► done (CACHED)
         ▼
-   Apple Music search             apple_music.py  search_songs(term, limit) → candidates
-        │
+   local Music library search     music_app.py    search_songs(term, limit) → candidates
+        │                         (AppleScript)
         ▼
    candidate scoring              matcher.py      0–100 per candidate, best first
         │
         ├── score ≥ 90 ─► store mapping (auto)      MATCHED
         ├── score ≥ 75 ─► manual review (planned)   REVIEW
-        └── otherwise ──► nothing stored            FAILED
+        └── otherwise ──► not in the library        FAILED
+        │                     └─► Music UI automation (planned)   music_ui.py
         ▼
-   playlist creation (planned)    apple_music.py
+   managed playlist               music_app.py    empty it, add tracks in source order
 ```
 
-`sync.py` runs this loop for a playlist; `cli.py` parses arguments and prints the
-report; `config.py` loads thresholds and weights; `models.py` holds the records.
+`sync.py` runs the matching loop for a playlist; `cli.py` parses arguments and prints
+the report; `config.py` loads thresholds, weights and the managed playlist prefix;
+`models.py` holds the records.
 
-Implemented today: everything except the real Apple Music client, the review prompt,
-playlist creation and the Spotify extractor. `apple_music.py` contains only
-`MockCatalog`, which searches a JSON fixture.
+What is connected today: everything down to candidate scoring runs against the mock
+catalog through `match`; the Music library search and all playlist operations work
+and are reachable through the `music-*` commands. Still to do: point `match` at the
+Music library, write the playlist from a `sync` command, the UI automation for songs
+that are not in the library, the review prompt and the Spotify extractor.
 
 ## Modules
 
@@ -41,15 +46,81 @@ playlist creation and the Spotify extractor. `apple_music.py` contains only
 | `models.py` | `SourceTrack`, `AppleCandidate`, `Mapping` | nothing |
 | `normalize.py` | Text cleanup, title/album/artist parsing, cache key | models |
 | `matcher.py` | `MatchConfig`, scoring, accept / review / fail decision | normalize, rapidfuzz |
-| `apple_music.py` | Catalog search (`MockCatalog` for now) | models, normalize |
+| `music_app.py` | `MusicApp`: everything said to Music, as AppleScript run by `osascript` | models |
+| `music_ui.py` | Operating the Music window through Accessibility. Only the permission check so far | music_app |
+| `apple_music.py` | The `search_songs` seam and `MockCatalog`, its offline implementation | models, normalize |
 | `database.py` | `MappingStore`: SQLite mapping cache | models, normalize |
 | `importer.py` | Load and validate a playlist export | models, normalize |
-| `config.py` | `Settings` from defaults plus optional JSON file | matcher |
-| `sync.py` | The pipeline loop | all of the above |
+| `config.py` | `Settings` from defaults plus optional JSON file | matcher, music_app |
+| `sync.py` | The matching loop, and one-track matching for the debug commands | all of the above |
 | `cli.py` | Commands and output | all of the above |
 
-The matcher never touches the network or the database: it takes a track and a list of
-candidates and returns a decision. That is what makes it testable without Apple Music.
+The matcher never touches Music or the database: it takes a track and a list of
+candidates and returns a decision. That is what makes it testable without Music.
+
+The one seam is `search_songs(term, limit) -> list[AppleCandidate]`. `MusicApp`
+implements it over the local library and `MockCatalog` over a JSON fixture; the
+pipeline cannot tell them apart.
+
+## Music app layer
+
+`music_app.py` is the only place that knows AppleScript or Music's scripting
+dictionary. The rest of the program calls methods such as `search_songs`,
+`ensure_playlist`, `add_tracks` and `clear_playlist` and does not know how they are
+carried out, so a future UI-automation path can sit behind the same kind of interface.
+
+How it is built:
+
+- **Scripts are constants; values travel as arguments.** Each script starts with
+  `on run argv` and is run as `osascript -e SCRIPT -- ARG...`. Titles and names are
+  never pasted into script text, so quotes and odd characters cannot break or alter a
+  script. The `--` keeps an argument such as `-1` from being read as an option.
+- **Replies are rows of fields** separated by the ASCII record and unit separators,
+  parsed in Python. A reply with the wrong shape is an error, not a guess.
+- **Errors are translated.** osascript's error number decides the exception:
+  `MusicPermissionError` for a missing Automation permission (-1743),
+  `AccessibilityPermissionError` when System Events reports "not allowed assistive
+  access", `UnmanagedPlaylistError` for the safety check, `MusicAppError` for the rest.
+- **The script runner is injectable.** `MusicApp(run=...)` takes any callable in place
+  of `osascript`, which is how the unit tests run the real adapter code without Music.
+
+Behaviours of the installed Music app that the code depends on, each found by trying
+it:
+
+| Observation | Consequence in the code |
+| --- | --- |
+| `search` needs every word to match (as a word prefix, any field, any order) and ignores case, accents and punctuation | Query is base title + primary artist; the word "and" is dropped |
+| An empty search term is error -50 | Blank searches are answered without calling Music |
+| Looking a playlist up by name ignores case | Names are compared again, exactly, in Python and in the script |
+| `user playlists` includes smart playlists, folders and Music's built-in lists | Only class `user playlist`, not smart, special kind `none` counts |
+| Asking an empty playlist for a property of every track is error -1728 | The track count is checked first |
+| Inside `tell application "Music"`, `names`, `artists` and `albums` are constants | Script variables use other names |
+| The library holds music videos as well as songs | Search keeps `media kind` song only |
+| A track has one persistent ID, in the library and in every playlist | That ID is the cached mapping |
+| There is no command to search the Apple Music catalog or add a catalog song | Songs outside the library need UI automation |
+
+### Safety rule
+
+A playlist may be changed only if its name is the managed prefix (default
+`Spotify Daily Mix`) or the prefix plus a space and more. The rule is enforced twice:
+
+1. In Python, before anything is sent. An unmanaged name raises
+   `UnmanagedPlaylistError` and no script runs.
+2. In AppleScript, at the top of every script that changes something. The playlist is
+   looked up by persistent ID and must still have the expected name, that name must be
+   managed, and it must be an ordinary playlist. This covers a playlist being renamed
+   between the lookup and the change.
+
+Tracks are deleted only through a reference to the playlist, never through the
+library, so removal affects the playlist alone. Unit tests check that every changing
+script begins with the safety check and that no reading script contains a changing
+command.
+
+### Updating a playlist
+
+Emptying a playlist keeps its persistent ID; deleting and recreating it produces a
+different playlist. The update strategy is therefore: find the managed playlist, empty
+it, add the new tracks in source order. Delete-and-recreate is the fallback.
 
 ## Normalization
 
@@ -105,7 +176,7 @@ other weights are rescaled.
 
 With title and artist identical, a single live/remix/acoustic mismatch gives at most
 70, which is below the review threshold. An unrecognised qualifier on one side gives at
-most 80, which lands in review. Equal scores keep the catalog's own search ranking.
+most 80, which lands in review. Equal scores keep the order the search returned.
 
 All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
 
@@ -113,18 +184,31 @@ All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
 
 - Key: `spotify:track:<id>` when the export has a Spotify ID, otherwise
   `meta:<artists>|<title>|<album>|<seconds>` built from normalized metadata.
-- Any stored mapping is a cache hit and skips the search.
+- Value: the matched track's Music persistent ID, plus its title, artist and album so
+  the table can be read by a person.
+- Any stored mapping is a cache hit and skips the search. Once `match` runs against
+  Music, a hit will first be checked with `has_track`, so a song since removed from
+  the library is matched afresh instead of trusted.
 - Only automatic matches (and, later, manual confirmations) are stored. Tracks that
   need review or failed are evaluated again on the next run.
 - A manual mapping is never replaced by an automatic one; the rule is enforced in the
   SQL upsert, not just by the caller.
 - Each mapping is committed as soon as it is made, so an interrupted run keeps its
   progress.
-- Mock runs use a separate database file so made-up catalog IDs cannot reach a real
+- Mock runs use a separate database file so made-up track IDs cannot reach a real
   playlist.
+
+## Tests
+
+- **Unit tests** (`tests/`) are deterministic and never touch Music. The Music adapter
+  is run against `tests/fake_music.py`, an in-memory stand-in for `osascript` that
+  speaks the same reply format and imitates the behaviours listed above.
+- **Live tests** (`tests/integration/`, marker `music_app`) drive the real app and run
+  only with `pytest --music-app`. They change one playlist, `Spotify Daily Mix TEST`,
+  restore it afterwards, and assert that the library and every other playlist are
+  unchanged.
 
 ## Deliberately absent
 
-No server, no web framework, no ORM, no async, no plugin system. The one seam is
-`search_songs(term, limit)`: the mock implements it now and the real Apple Music client
-will implement it next.
+No server, no web framework, no ORM, no async, no plugin system, no Apple API client
+and no credential handling.

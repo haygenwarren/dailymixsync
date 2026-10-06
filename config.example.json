@@ -1,6 +1,7 @@
 {
   "database_path": "data/mappings.sqlite3",
   "search_limit": 10,
+  "managed_playlist_prefix": "Spotify Daily Mix",
   "matching": {
     "auto_accept_threshold": 90,
     "review_threshold": 75,

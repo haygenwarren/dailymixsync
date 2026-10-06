@@ -1,8 +1,8 @@
-"""Apple Music catalog access.
+"""Where candidate songs come from.
 
-Only the offline MockCatalog exists so far. The real Apple Music API client will
-provide the same search_songs() method, so the rest of the pipeline does not care
-which one it is given.
+The pipeline only needs search_songs(). Two things provide it: music_app.MusicApp,
+which searches the local Music library, and MockCatalog here, which searches a JSON
+fixture so matching can be tested without Music.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ class CatalogSearch(Protocol):
 
 
 class MockCatalog:
-    """Stand-in for Apple Music catalog search, backed by a JSON fixture.
+    """Stand-in for a song search, backed by a JSON fixture.
 
     It is deliberately as undiscerning as a real search box: it returns every song
     that shares at least half of the query's words, in fixture order, including
@@ -48,7 +48,7 @@ class MockCatalog:
             entries = json.loads(path.read_text(encoding="utf-8"))["songs"]
             songs = [
                 AppleCandidate(
-                    catalog_id=str(e["id"]),
+                    persistent_id=str(e["id"]),
                     title=e["title"],
                     artist=e["artist"],
                     album=e.get("album") or "",

@@ -78,7 +78,7 @@ def test_verbose_logs_candidate_scores(workdir, capsys, sample_playlist_path, mo
 
 def test_match_without_a_catalog_explains_what_is_missing(workdir, capsys, sample_playlist_path):
     assert main(["match", str(sample_playlist_path)]) == 1
-    assert "not implemented yet" in capsys.readouterr().err
+    assert "not connected yet" in capsys.readouterr().err
     assert not (workdir / "data").exists()
 
 
