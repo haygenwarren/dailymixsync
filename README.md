@@ -6,8 +6,8 @@ track metadata (title, artist, album, duration). No audio is downloaded, copied 
 transferred.
 
 ```
-Spotify Daily Mix
-→ track metadata
+Spotify Daily Mix, open in the Spotify web player
+→ browser extension: the track list, saved as a JSON file
 → matching against your local Apple Music library
 → a Daily Mix playlist made of the songs you already have
 ```
@@ -30,7 +30,7 @@ MusicKit, no API key or token, and no hosted service.
 | --- | --- |
 | Matching against your Music library, with cache and manual review | Working, tested against the real app |
 | Library-only playlist sync: write, verify, roll back on failure | Working, tested against the real app |
-| Spotify browser extractor | Not built. The export file has to come from elsewhere for now |
+| Spotify export, a Chrome extension in [`extension/`](extension/README.md) | Working on public playlists, tested in a real Chrome against the real site. Not yet run on a Daily Mix in a signed-in browser; see [what was verified](#what-was-verified-against-spotify) |
 | Adding songs you do not have, from the Apple Music catalog | Not part of sync. Kept as [experimental commands](#experimental-apple-music-catalog-support) only |
 
 ## Requirements
@@ -41,6 +41,9 @@ MusicKit, no API key or token, and no hosted service.
   catalog songs can live in your library and in playlists.
 - **Automation permission** for the app you run the tool from; see
   [Permissions](#permissions). Nothing else: a sync needs no Accessibility permission.
+- **Google Chrome**, or another Chromium browser, for the Spotify export extension.
+- **Node.js** only if you want to run the extension's tests. The extension itself has
+  no dependencies and no build step.
 
 ## Setup
 
@@ -55,6 +58,49 @@ pip install -e ".[dev]"
 Dependencies: [`rapidfuzz`](https://github.com/rapidfuzz/RapidFuzz) for fuzzy string
 matching, and `pytest` for the tests. SQLite, JSON and logging come from the standard
 library, and Music is driven with the `osascript` command that ships with macOS.
+
+## From Spotify to Apple Music
+
+The whole path, once the extension is loaded
+([how to load it](extension/README.md#install): `chrome://extensions` → Developer
+mode → Load unpacked → the `extension/` folder).
+
+1. **Open a Daily Mix** in the Spotify web player, <https://open.spotify.com>.
+2. **Export it.** Click the extension's button, then **Export this playlist**. It
+   reads every track and downloads a file named after the playlist, such as
+   `daily_mix_1.json`.
+3. **Move the file into `data/`**, which is git-ignored:
+
+   ```sh
+   mv ~/Downloads/daily_mix_1.json data/
+   ```
+
+4. **Validate it.** This reads the file and touches nothing else:
+
+   ```sh
+   python -m daily_mix_sync validate data/daily_mix_1.json
+   ```
+
+5. **Dry run.** See which songs are in your library and what the playlist would hold.
+   Nothing in Music is created or changed:
+
+   ```sh
+   python -m daily_mix_sync sync data/daily_mix_1.json --dry-run
+   ```
+
+6. **Sync.**
+
+   ```sh
+   python -m daily_mix_sync sync data/daily_mix_1.json
+   ```
+
+The export is used as it comes out of the extension; there is nothing to edit by hand.
+The sync stays **library-only**: the playlist `Spotify Daily Mix 1` gets the songs of
+the mix that are already in your Apple Music library, and the rest are listed and left
+out. Repeat from step 1 for each Daily Mix you want.
+
+The extension only reads the Spotify page. It does not start a sync, run Python, or
+talk to Music; the two halves meet in the JSON file and nowhere else.
 
 ## Try it offline
 
@@ -303,8 +349,8 @@ Result: match (score 100.0; accepted from 90).
 
 ## Playlist export format
 
-This is what the browser extractor will produce. Until it exists, write the file by
-hand or generate it some other way.
+This is what the [browser extension](extension/README.md) produces. A file written by
+hand or by anything else works the same, as long as it has this shape.
 
 ```json
 {
@@ -328,6 +374,8 @@ hand or generate it some other way.
   album or duration is left out of the score rather than counted against a candidate.
 - If only `spotify_url` is given, the track ID is taken from it.
 - If `playlist_name` is missing, the file name is used.
+- Other fields are ignored. The extension adds two at the top level for your own
+  reference, `source_url` and `exported_at`.
 - Keep your own exports in `data/`, which is git-ignored.
 
 ## Configuration
@@ -398,9 +446,9 @@ upgraded in place the first time it is opened.
 python -m pytest
 ```
 
-625 tests: normalization, scoring, the SQLite store, input validation, config, the
+635 tests: normalization, scoring, the SQLite store, input validation, config, the
 mock catalog, cache validation, manual review, playlist writing with verification and
-rollback, the CLI and the Music adapter. Everything that would talk to Music runs
+rollback, the CLI, the Music adapter, and reading the extension's export. Everything that would talk to Music runs
 against an in-memory stand-in for `osascript` (`tests/fake_music.py`), which can be
 told to fail at a chosen point. One file, `tests/test_library_only.py`, pins down the
 supported workflow itself: that nothing on the sync path imports the experimental
@@ -424,20 +472,84 @@ temporary mapping database, so your real cache is not touched. They never delete
 test playlist; if they had to create it, it is left in place, empty. They need only
 the Automation permission below.
 
-The experimental catalog code has its own unit tests, included in the 625, and its
+The experimental catalog code has its own unit tests, included in the 635, and its
 own live switch; see [the experimental section](#experimental-apple-music-catalog-support).
 
-## How Spotify extraction will work
+**The browser extension** has its own tests, in JavaScript, run with Node:
+
+```sh
+npm install     # once; installs jsdom, used only by these tests
+npm test
+```
+
+141 tests, no browser needed: the pure functions, row reading against a fixture page
+written the way Spotify writes it, the scroll loop against a simulated page that holds
+only the rows near the viewport, and the extension's permissions and read-only rules.
+The two suites share one file, `tests/extension/fixtures/expected_export.json`: the
+JavaScript tests require the extension to produce it byte for byte, and
+`tests/test_extension_export.py` loads it through the real importer.
+
+```sh
+npm run test:live
+```
+
+runs the real extension in a hidden Chrome with a throwaway profile, signed out,
+against public playlists on the real Spotify site, and compares each export with what
+the page reports. Details in the [extension README](extension/README.md#tests).
+
+## How Spotify extraction works
 
 Spotify's Web API does not return the contents of Spotify-owned personalised playlists
-such as Daily Mixes, so the track list has to come from the Spotify web player itself.
+such as Daily Mixes, so the track list is read from the Spotify web player itself, by
+a minimal Chrome Manifest V3 extension in [`extension/`](extension/README.md). There
+is no Spotify login in this project, no OAuth, and no call to any Spotify API.
 
-The plan is a minimal Chrome Manifest V3 extension for `open.spotify.com`.
-You open a Daily Mix, click the extension, and it reads the playlist title and the
-track rows (title, artists, album, duration, track link) and saves them as a JSON file
-in the format above. The track list is virtualised, so the script scrolls the list and
-collects rows as they appear, keyed by track link, rather than assuming a fixed count.
-Spotify-specific DOM selectors will be kept in one place.
+- **What it reads.** The playlist name, and for every row the title, the artists, the
+  album, the duration and the track link, as the page shows them. Text is passed on
+  untouched; normalization happens in Python.
+- **The list is virtualised.** Spotify keeps only the rows near the viewport in the
+  page. The extension scrolls the list in overlapping steps and stores every row under
+  its position in the playlist, so a row seen many times is stored once and a gap
+  cannot go unnoticed. It stops when every position up to the count the page states
+  has been read, then puts the scroll position back. Nothing assumes fifty tracks.
+- **It fails rather than exporting short.** A row that never appears, a playlist that
+  changes mid-read, a missing name or a page it does not recognise all end in a
+  message that says what was looked for, never in a quietly incomplete file.
+- **Read-only.** The code in the Spotify tab only reads and scrolls. It never clicks
+  or types, makes no network requests, and asks for no standing access to Spotify:
+  its two permissions, `activeTab` and `scripting`, take effect only when you click
+  its button. The tests enforce this by reading the source.
+- **One place for Spotify's markup.** Every selector is in `extension/spotify_dom.js`,
+  listed in the [extension README](extension/README.md#when-spotify-changes-its-page).
+
+### What was verified against Spotify
+
+On 2026-10-07, with Chrome 154, the real extension was loaded into a hidden Chrome
+with a throwaway profile and run, signed out, against public playlists on
+`open.spotify.com`:
+
+| Playlist | Page says | Exported | Notes |
+| --- | --- | --- | --- |
+| Today's Top Hits | 50 songs | 50 | 11 tracks with several artists |
+| Rock Classics | 200 songs | 200 | needs scrolling; also started from the bottom of the page |
+| Viva Latino | 50 songs | 50 | 31 tracks with several artists; accents; a 520 × 430 window |
+| K-Pop ON! (온) | 51 songs | 51 | Hangul in the playlist name and albums; a 700-wide window |
+
+For each: the count equals the page's own, the first 30 tracks equal the list in the
+page's metadata in the same order, no track is repeated, every track has title,
+artist, album, duration and ID, and the page ends up scrolled where it started. The
+popup's other states were checked too: not Spotify, not a playlist, and a failure on a
+playlist address that does not exist.
+
+All four files passed `validate` exactly as downloaded, and two went through
+`sync --dry-run` against a real library (the 200-song list: 62 in the library, 5 for
+review, 133 not in the library).
+
+**Not verified: a Daily Mix.** Daily Mixes need a signed-in account, which that hidden
+browser does not have. A Daily Mix page is built from the same parts as the public
+playlists above, but that has not been confirmed. The
+[extension README](extension/README.md#trying-it-on-your-own-daily-mixes) has a short
+list of checks to run on your own.
 
 ## Music app integration
 
@@ -575,8 +687,14 @@ you granted it earlier and do not use those commands, you can switch it off agai
 
 - **Only songs already in your Music library are synced.** This is the design, not a
   gap: the rest of a Daily Mix is left out and listed.
-- There is no Spotify extractor yet, so the export file has to be written by hand or
-  produced some other way.
+- The Spotify export reads Spotify's web page, whose markup can change at any time.
+  When it does, the export fails with a message and `extension/spotify_dom.js` needs
+  updating. Its other limits are in the
+  [extension README](extension/README.md#known-limits): local files and podcast
+  episodes are left out, durations are whole seconds, and it has not yet been run on a
+  Daily Mix in a signed-in browser.
+- Each Daily Mix is exported by hand, one click per playlist, and synced with one
+  command per file. Nothing runs on a schedule.
 - A song can be in your library and still not be found if Spotify and Apple Music
   credit a different primary artist: the library search needs every word of the title
   and of the first artist to be present.
@@ -669,7 +787,13 @@ can affect `sync`, which does not use the window.
 
 ## Next steps
 
-1. **Spotify extractor.** A Chrome extension that reads an open Daily Mix in the
-   Spotify web player and saves it in the export format above, so the file no longer
-   has to be made by hand. With it, the whole path from Spotify to a library-only
-   Apple Music playlist is covered.
+1. **Run it on real Daily Mixes.** Export your own mixes in a signed-in browser,
+   follow the checks in the extension README, and sync them. That is the one part of
+   the path nobody but you can try.
+2. **Tune matching on what real mixes show.** The first real exports already show near
+   misses that are plainly right yet land in review: a song whose copy in the library
+   sits on a compilation album (`Immigrant Song`, 89.8 where 90 is accepted), and an
+   artist credited differently (Jimi Hendrix on Spotify, The Jimi Hendrix Experience
+   in the library, 89.0). Real data is the right basis for adjusting those rules.
+3. **Several mixes at once.** Let `sync` take more than one export, so that a
+   morning's Daily Mixes are one command.

@@ -1,8 +1,11 @@
 # Architecture
 
-One Python package, one SQLite file, no services, no credentials. Each stage is a
-module with plain functions and dataclasses, so any stage can be run and tested on
-its own.
+One Python package, one SQLite file, and one small browser extension; no services, no
+credentials. Each stage is a module with plain functions and dataclasses, so any stage
+can be run and tested on its own.
+
+The two halves meet in one place only: the extension writes a playlist export, a JSON
+file, and the Python application reads it. Neither calls the other.
 
 The supported workflow is **library-only**: a Daily Mix is recreated from the songs
 that are already in the Apple Music library, and the rest are left out. Nothing is
@@ -11,6 +14,9 @@ added to the library, and Music is reached through AppleScript alone.
 ## Pipeline
 
 ```
+Spotify web player                extension/      read the page, scroll, collect by position
+        │                         (Chrome)        → download daily_mix_1.json
+        ▼
 playlist export (JSON)            importer.py     validate, drop duplicates
         │
         ▼
@@ -85,6 +91,96 @@ implements them over the local library and `MockCatalog` over a JSON fixture; th
 matching loop cannot tell them apart, so `match` and `review` run the same code
 against either. That seam is also where a future source of songs would plug in,
 without the pipeline changing.
+
+## Spotify export extension
+
+`extension/` is a Manifest V3 Chrome extension in plain JavaScript: no framework, no
+build step, no dependencies. Its own README covers use, permissions and the selectors;
+this is how it is put together and why.
+
+| File | Responsibility | Touches |
+| --- | --- | --- |
+| `export_format.js` | Pure functions: duration, track ID and URL, file name, merging rows, the JSON | nothing |
+| `spotify_dom.js` | Every selector, and reading a name, a count or a row from the page | reads the DOM |
+| `content.js` | `scanPlaylist`: the scroll-and-collect loop; and the link to the popup | reads the DOM, sets `scrollTop` |
+| `popup.html`, `popup.js` | The states the user sees; injects the three files above; saves the file | `chrome.*`, its own page |
+| `manifest.json` | `activeTab` and `scripting`, an action with a popup, nothing else | |
+
+The three page files are ordinary scripts that hang their functions on one shared
+object, so the same files run in the tab, in the popup and under Node for the tests,
+with nothing to bundle. Nothing in them uses a global `document`: they are handed the
+document, a clock and a `sleep`, which is what lets the tests drive them.
+
+### Why rows are collected by position
+
+Spotify keeps only the rows near the viewport in the page and swaps them as it
+scrolls, so the list has to be scrolled and read piece by piece. The obvious way to
+merge the pieces, by track ID, goes wrong twice: it drops a song that is in the
+playlist two times, and it cannot tell whether anything was missed.
+
+Each row carries `aria-rowindex`, its place in the list, and the list carries
+`aria-rowcount`. So rows go into a map keyed by position. Reading a row again is
+harmless, the order is exact, and completeness is a fact that can be checked: every
+position from 1 to the count is there, or the export is refused. The loop is written
+around the one row it still needs:
+
+```
+read every row in the page into the map
+need = lowest position not read yet           none left → done
+need below what the page shows → scroll down one step
+need above it → scroll up one step (straight to the top for row 1)
+no rows in the page → still loading: wait      (for row 1: look from the top down)
+pause, then wait for a redraw; a page that does not redraw in time gets longer next time
+no new row for 10 seconds → fail, naming the row
+```
+
+A step is 80% of the visible height, so consecutive views overlap. Every pass pauses
+at least once, so the loop cannot spin and freeze the tab, and it ends either complete
+or with an error; there is no third outcome. The scroll position is restored in a
+`finally`, whether the scan succeeded, failed or was cancelled by closing the popup.
+
+Duplicate songs are deliberately left in. Dropping repeats is the importer's job, and
+it reports what it dropped.
+
+### Why `activeTab` and not access to Spotify
+
+With `activeTab` and `scripting`, the extension has no standing access to any site.
+Clicking its button grants access to that one tab; the popup then checks the address
+and injects the scripts. The alternative, a content script declared for
+`open.spotify.com`, would run on every Spotify page whether or not an export was
+wanted. The download uses a link in the popup, which needs no permission.
+
+### Read-only, enforced
+
+The scripts that run in the Spotify tab may read the page and assign `scrollTop`,
+and that is all. `tests/extension/extension_files.test.js` reads their source and
+fails on a click, a focus, a dispatched event, a network call, a storage or cookie
+read, any change to the page, any assigned property other than `scrollTop`, and any
+extension API beyond the connection to the popup. A second test runs a whole scan
+against the simulated page with those methods instrumented and checks the page is
+byte for byte as it was found.
+
+### When the markup is not what was expected
+
+Every step that depends on the page has its own failure, carrying the name of the
+selector that found nothing: no track list, no playlist name, no row count, rows
+without a position, no readable rows. A row that is recognisably something else (a
+podcast episode, a local file) is left out and reported rather than guessed at. The
+debug text records each step with its timing, how many elements each selector matches,
+and the markup of one row with class names removed.
+
+No generated class name is used: selectors are `data-testid` values, ARIA roles and
+attributes, and link addresses, and the scrolling element is found by its computed
+`overflow-y`.
+
+### The contract with the importer
+
+`tests/extension/fixtures/expected_export.json` was written independently of the
+extension, from the list of songs the fixture page is meant to hold. The JavaScript
+tests require the extension's
+export of that page to equal it byte for byte; `tests/test_extension_export.py` loads
+it through `load_playlist` and requires every track to arrive with nothing skipped or
+warned about. A change to the format on either side breaks one of the two.
 
 ## Music app layer
 
@@ -420,9 +516,25 @@ All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
   window (`tests/fake_ui.py`), tests that read the window scripts as text for what
   they are allowed to do, and six read-only live tests behind their own switch,
   `pytest --music-ui`.
+- **Extension** (`tests/extension/`, run with `npm test`). Node's built-in test
+  runner, with jsdom as the only dependency. Rows are read from a fixture page
+  modelled on Spotify's real markup. The scroll loop runs against
+  `helpers/spotify_page.js`, a simulated page that holds only the rows near the
+  viewport, redraws after a delay, can load rows late or never, and keeps its own
+  clock, so slow pages and stalls are tested in milliseconds. That clock has a
+  ceiling: a scan that would never end fails its test instead of hanging it.
+- **Extension, live** (`npm run test:live`). The real extension, loaded into a hidden
+  Chrome with a throwaway profile through the DevTools protocol, exporting public
+  playlists from the real site and compared with the page's own metadata. It is to the
+  extension what `--music-app` is to the Music adapter, with one gap: it is signed
+  out, so it cannot open a Daily Mix.
 
 ## Deliberately absent
 
 No server, no web framework, no ORM, no async, no plugin system, no Apple API client
 and no credential handling. In the supported workflow: no UI automation, no
 Accessibility permission, and no way to add a song to the library.
+
+On the Spotify side: no Spotify login, OAuth or Web API, no background or scheduled
+export, no local server or native messaging between the extension and Python, and no
+"sync" button in the browser. The extension produces a file and stops.

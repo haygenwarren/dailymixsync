@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Daily Mix Sync: Spotify export",
+  "description": "Saves the track list of the Spotify playlist in the current tab as a JSON file for Daily Mix Sync. Reads the page and changes nothing.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "110",
+  "permissions": ["activeTab", "scripting"],
+  "action": {
+    "default_title": "Export this Spotify playlist",
+    "default_popup": "popup.html"
+  }
+}

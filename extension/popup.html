@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Daily Mix Sync</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --text: #1b1b1b;
+        --muted: #5f6368;
+        --line: #d9dce0;
+        --accent: #1a7f43;
+        --warn: #8a5a00;
+        --bad: #b3261e;
+        --panel: #f3f4f6;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --text: #ececec;
+          --muted: #a6abb1;
+          --line: #454a50;
+          --accent: #4cc27c;
+          --warn: #e2b45a;
+          --bad: #f2877f;
+          --panel: #2c2f33;
+        }
+      }
+      body {
+        width: 300px;
+        margin: 0;
+        padding: 12px 14px 10px;
+        font: 13px/1.4 system-ui, -apple-system, sans-serif;
+        color: var(--text);
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      p {
+        margin: 0 0 8px;
+        overflow-wrap: anywhere;
+      }
+      #headline {
+        font-size: 14px;
+        font-weight: 600;
+      }
+      body[data-state="done"] #headline {
+        color: var(--accent);
+      }
+      body[data-state="failed"] #headline {
+        color: var(--bad);
+      }
+      #detail,
+      #lookup {
+        color: var(--muted);
+      }
+      #lookup {
+        font-size: 12px;
+      }
+      code {
+        font: 11px/1.4 ui-monospace, Menlo, monospace;
+        overflow-wrap: anywhere;
+      }
+      progress {
+        width: 100%;
+        height: 6px;
+        margin: 0 0 8px;
+        accent-color: var(--accent);
+      }
+      ul {
+        margin: 0 0 8px;
+        padding: 6px 8px 6px 22px;
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--warn);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      #actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 2px 0 8px;
+      }
+      button {
+        font: inherit;
+        padding: 5px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+      }
+      button.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #fff;
+        font-weight: 600;
+      }
+      @media (prefers-color-scheme: dark) {
+        button.primary {
+          color: #10231a;
+        }
+      }
+      label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 12px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body data-state="checking">
+    <h1>Daily Mix Sync</h1>
+    <p id="headline">Checking this tab…</p>
+    <progress id="progress" max="1" value="0" hidden></progress>
+    <p id="detail" hidden></p>
+    <ul id="warnings" hidden></ul>
+    <p id="lookup" hidden></p>
+    <div id="actions">
+      <button id="export" class="primary" hidden>Export this playlist</button>
+      <button id="download" hidden>Download again</button>
+      <button id="copy-debug" hidden>Copy debug info</button>
+    </div>
+    <label id="debug-option" hidden>
+      <input type="checkbox" id="debug" />
+      Log each step to the page's console
+    </label>
+    <script src="export_format.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

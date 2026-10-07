@@ -1,0 +1,12 @@
+{
+  "name": "daily-mix-sync-extension-tests",
+  "private": true,
+  "description": "Test tooling for the browser extension in extension/. The extension itself has no dependencies and no build step.",
+  "scripts": {
+    "test": "node --test --test-timeout=30000 \"tests/extension/*.test.js\"",
+    "test:live": "node tests/extension/live/check_public_playlists.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}

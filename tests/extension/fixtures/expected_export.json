@@ -1,0 +1,93 @@
+{
+  "playlist_name": "Daily Mix 1",
+  "source_url": "https://open.spotify.com/playlist/FIXTUREPLAYLIST0000001",
+  "exported_at": "2026-10-07T12:00:00.000Z",
+  "tracks": [
+    {
+      "title": "Mr. Brightside",
+      "artist": "The Killers",
+      "album": "Hot Fuss",
+      "duration_ms": 222000,
+      "spotify_track_id": "FIXTURE000000000000001",
+      "spotify_url": "https://open.spotify.com/track/FIXTURE000000000000001"
+    },
+    {
+      "title": "This Is What You Came For",
+      "artist": "Calvin Harris, Rihanna",
+      "album": "This Is What You Came For",
+      "duration_ms": 222000,
+      "spotify_track_id": "FIXTURE000000000000002",
+      "spotify_url": "https://open.spotify.com/track/FIXTURE000000000000002"
+    },
+    {
+      "title": "HUMBLE.",
+      "artist": "Kendrick Lamar",
+      "album": "DAMN.",
+      "duration_ms": 177000,
+      "spotify_track_id": "FIXTURE000000000000003",
+      "spotify_url": "https://open.spotify.com/track/FIXTURE000000000000003"
+    },
+    {
+      "title": "4:33",
+      "artist": "John Cage",
+      "album": "Cage: Works for Piano",
+      "duration_ms": 273000,
+      "spotify_track_id": "FIXTURE000000000000004",
+      "spotify_url": "https://open.spotify.com/track/FIXTURE000000000000004"
+    },
+    {
+      "title": "Déjà Vu (feat. JAY-Z)",
+      "artist": "Beyoncé, JAY-Z",
+      "album": "B'Day Deluxe Edition",
+      "duration_ms": 240000,
+      "spotify_track_id": "FIXTURE000000000000005",
+      "spotify_url": "https://open.spotify.com/track/FIXTURE000000000000005"
+    },
+    {
+      "title": "夜に駆ける",
+      "artist": "YOASOBI",
+      "album": "THE BOOK",
+      "duration_ms": 261000,
+      "spotify_track_id": "FIXTURE000000000000006",
+      "spotify_url": "https://open.spotify.com/track/FIXTURE000000000000006"
+    },
+    {
+      "title": "See You Again (feat. Kali Uchis)",
+      "artist": "Tyler, The Creator, Kali Uchis",
+      "album": "Flower Boy",
+      "duration_ms": 180000,
+      "spotify_track_id": "FIXTURE000000000000007",
+      "spotify_url": "https://open.spotify.com/track/FIXTURE000000000000007"
+    },
+    {
+      "title": "Autobahn - 2009 Remaster",
+      "artist": "Kraftwerk",
+      "album": "Autobahn (2009 Remaster)",
+      "duration_ms": 3795000,
+      "spotify_track_id": "FIXTURE000000000000008",
+      "spotify_url": "https://open.spotify.com/track/FIXTURE000000000000008"
+    },
+    {
+      "title": "Rock & Roll <Live> \"Bootleg\"",
+      "artist": "AC/DC",
+      "spotify_track_id": "FIXTURE000000000000011",
+      "spotify_url": "https://open.spotify.com/track/FIXTURE000000000000011"
+    },
+    {
+      "title": "Mr. Brightside",
+      "artist": "Run River North",
+      "album": "Mr. Brightside",
+      "duration_ms": 231000,
+      "spotify_track_id": "FIXTURE000000000000012",
+      "spotify_url": "https://open.spotify.com/track/FIXTURE000000000000012"
+    },
+    {
+      "title": "Sigur 1 (Untitled)",
+      "artist": "Sigur Rós",
+      "album": "( )",
+      "duration_ms": 398000,
+      "spotify_track_id": "FIXTURE000000000000013",
+      "spotify_url": "https://open.spotify.com/track/FIXTURE000000000000013"
+    }
+  ]
+}
