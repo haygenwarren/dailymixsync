@@ -29,7 +29,6 @@ def fake(tmp_path, monkeypatch):
         ],
     )
     monkeypatch.setattr(cli, "MusicApp", lambda prefix: MusicApp(prefix, run=fake))
-    monkeypatch.setattr(cli.music_ui, "accessibility_allowed", lambda: True)
     monkeypatch.chdir(tmp_path)
     return fake
 
@@ -49,27 +48,15 @@ def test_music_test_reports_what_music_answered(fake, capsys):
         "Playlists:  3\n"
         "Managed:    none yet  (prefix 'Spotify Daily Mix')\n"
         "OK: Music answered every request.\n"
-        "Window control: permitted\n"
     )
 
 
-def test_music_test_says_when_window_control_is_not_permitted(fake, capsys, monkeypatch):
-    monkeypatch.setattr(cli.music_ui, "accessibility_allowed", lambda: False)
-    code, out, _ = run(capsys, "music-test")
-    assert code == 0  # reaching Music is what this command checks
-    assert "OK: Music answered every request.\n" in out
-    assert "Window control: not permitted. Only needed for songs that are not in your" in out
-    assert "System Settings → Privacy & Security → Accessibility" in out
-
-
-def test_music_test_survives_a_failing_window_control_check(fake, capsys, monkeypatch):
-    def broken():
-        raise music_app.MusicAppError("System Events did not answer")
-
-    monkeypatch.setattr(cli.music_ui, "accessibility_allowed", broken)
+def test_music_test_asks_nothing_about_the_music_window(fake, capsys):
+    """Normal commands need Automation permission only; Accessibility is not consulted."""
     code, out, _ = run(capsys, "music-test")
     assert code == 0
-    assert "Window control: could not be checked (System Events did not answer)" in out
+    assert "Window control" not in out and "Accessibility" not in out
+    assert not any("System Events" in script for script in fake.scripts_sent())
 
 
 def test_music_test_starts_music_when_it_is_not_running(fake, capsys):

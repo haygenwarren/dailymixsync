@@ -110,7 +110,6 @@ class MatchResult:
     mapping: Mapping | None = None  # set when status is CACHED or MANUAL
     chosen: AppleCandidate | None = None  # the track to use; None while unresolved
     stale: bool = False  # a stored mapping pointed at a track that no longer exists
-    from_catalog: bool = False  # the track was added to the library from Apple Music's catalog
 
     @property
     def best(self) -> ScoredCandidate | None:

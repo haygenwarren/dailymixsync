@@ -2,7 +2,11 @@
 
 One Python package, one SQLite file, no services, no credentials. Each stage is a
 module with plain functions and dataclasses, so any stage can be run and tested on
-its own. Apple Music is reached only by driving the Music app on this Mac.
+its own.
+
+The supported workflow is **library-only**: a Daily Mix is recreated from the songs
+that are already in the Apple Music library, and the rest are left out. Nothing is
+added to the library, and Music is reached through AppleScript alone.
 
 ## Pipeline
 
@@ -10,44 +14,40 @@ its own. Apple Music is reached only by driving the Music app on this Mac.
 playlist export (JSON)            importer.py     validate, drop duplicates
         │
         ▼
-   SourceTrack ──► normalization  normalize.py    base title, flags, qualifiers, artists
+   normalize                      normalize.py    base title, flags, qualifiers, artists
         │
         ▼
    cache lookup                   database.py     source key → remembered Music track
         │                         music_app.py    is that track still in the library?
-        │ miss, or track gone          └── yes ──► CACHED
+        │ miss, or track gone          └── yes ──► include (CACHED)
         ▼
    local Music library search     music_app.py    search_songs(term, limit) → candidates
         │                         (AppleScript)
         ▼
    candidate scoring              matcher.py      0–100 per candidate, best first
         │
-        ├── score ≥ 90 ─► remember (auto)            MATCHED
-        ├── score ≥ 75 ─► manual review   review.py  MANUAL if picked (remembered), else REVIEW
-        └── otherwise ──► not in the library         FAILED
-        │
-        ▼  only for FAILED tracks, and only with --catalog
-   Apple Music catalog            catalog.py      search → score → choose → add → wait → check
-        │                         music_ui.py     search and Add to Library   (Music window)
-        │                         music_app.py    find the added song         (AppleScript)
-        │                              └── confirmed ──► remembered like any other match
+        ├── matched  (≥ 90) ──► include, remember           MATCHED
+        ├── review   (≥ 75) ──► manual choice   review.py   MANUAL if picked, else left out
+        └── not in library ───► skip                        FAILED
         ▼
-   every track resolved or set aside; no playlist has changed yet
+   every track included or left out; no playlist has changed yet
         │
         ▼
-   managed playlist               sync.py         record contents → empty → add in order
+   managed playlist update        sync.py         record contents → empty → add in order
                                   music_app.py    → read back and compare → restore on failure
 ```
 
-`sync.py` holds the matching loop, which works with anything that can search for
-songs, and the playlist write, which needs the real Music app. `catalog.py` is the
-fallback for tracks the library lacks. `cli.py` parses arguments, asks the questions
-and prints the report; `config.py` loads thresholds, weights and the managed playlist
-prefix; `models.py` holds the records.
+A track that is not in the library is an expected outcome, not an error. Its internal
+status is still called `FAILED` (the matcher did not produce a match), but against the
+library every report words it as "not in library" and the run succeeds without it.
 
-The rule for the window: it is used for the two things AppleScript cannot do, finding
-a song in the catalog and adding it, and for nothing else. The moment a song is in
-the library, the work goes back to `MusicApp`.
+`sync.py` holds the matching loop, which works with anything that can search for
+songs, and the playlist write, which needs the real Music app. `cli.py` parses
+arguments, asks the questions and prints the report; `config.py` loads thresholds,
+weights and the managed playlist prefix; `models.py` holds the records.
+
+None of the modules on this path imports `music_ui.py`, `catalog.py` or
+`experimental.py`, and a test fails if one ever does.
 
 Still to do: the Spotify extractor.
 
@@ -59,15 +59,22 @@ Still to do: the Spotify extractor.
 | `normalize.py` | Text cleanup, title/album/artist parsing, cache key | models |
 | `matcher.py` | `MatchConfig`, scoring, accept / review / fail decision | normalize, rapidfuzz |
 | `music_app.py` | `MusicApp`: everything said to Music, as AppleScript run by `osascript` | models |
-| `music_ui.py` | `MusicCatalogUI`: everything that depends on the layout of the Music window | music_app |
-| `catalog.py` | Resolving a track through the catalog: search, score, add, wait for the library, check | sync, music_ui, music_app, matcher, database |
 | `apple_music.py` | The search seam and `MockCatalog`, its offline implementation | models, normalize |
 | `review.py` | Asking a person to pick among candidates; stores the pick as a manual mapping | matcher, database |
 | `database.py` | `MappingStore`: SQLite mapping cache | models, normalize |
 | `importer.py` | Load and validate a playlist export | models, normalize |
 | `config.py` | `Settings` from defaults plus optional JSON file | matcher, music_app |
 | `sync.py` | The matching loop, destination naming, and the playlist write with verification and restore | all of the above |
-| `cli.py` | Commands and output | all of the above |
+| `cli.py` | The supported commands and their output; registers the experimental ones | all of the above |
+
+Experimental, off the main path (see
+[Experimental subsystem](#experimental-subsystem-apple-music-catalog)):
+
+| Module | Responsibility | Depends on |
+| --- | --- | --- |
+| `music_ui.py` | `MusicCatalogUI`: everything that depends on the layout of the Music window | music_app |
+| `catalog.py` | Resolving a track through the catalog: search, score, add, wait for the library, check | sync, music_ui, music_app, matcher, database |
+| `experimental.py` | The `experimental-*` commands, and the only way into the two modules above | cli, catalog, music_ui |
 
 The matcher never touches Music or the database: it takes a track and a list of
 candidates and returns a decision. That is what makes it testable without Music.
@@ -76,14 +83,15 @@ The one seam is two methods: `search_songs(term, limit)` to find candidates, and
 `get_track(persistent_id)` to check that a remembered track still exists. `MusicApp`
 implements them over the local library and `MockCatalog` over a JSON fixture; the
 matching loop cannot tell them apart, so `match` and `review` run the same code
-against either.
+against either. That seam is also where a future source of songs would plug in,
+without the pipeline changing.
 
 ## Music app layer
 
 `music_app.py` is the only place that knows AppleScript or Music's scripting
 dictionary. The rest of the program calls methods such as `search_songs`,
 `ensure_playlist`, `add_tracks` and `clear_playlist` and does not know how they are
-carried out, so a future UI-automation path can sit behind the same kind of interface.
+carried out.
 
 How it is built:
 
@@ -163,7 +171,18 @@ drops whatever the name shares with the end of the prefix: `Daily Mix 1` →
 name a playlist outside the managed ones; `--into` is checked against the same rule
 before anything else happens.
 
-## Music window layer
+## Experimental subsystem: Apple Music catalog
+
+Everything from here to [Normalization](#normalization) describes code that the
+supported workflow does not use. It is kept for possible future work on songs that
+are not in the library, and it is reachable only through the `experimental-*`
+commands in `experimental.py`. It needs Accessibility permission, takes over the
+screen, and can add songs to the Music library, none of which is true of `sync`.
+
+Why it is not part of sync: the project's aim is a playlist of songs the user already
+has, with the library left exactly as it is. The catalog path conflicts with that by
+construction, and it is also the fragile part, since it depends on how the Music
+window happens to be built.
 
 `music_ui.py` is the only place that knows how the Music window is built. It talks to
 System Events through the same `osascript` runner as `music_app.py`, with the same
@@ -241,7 +260,7 @@ No screen coordinates, mouse movement or image matching are used anywhere.
   read the script and fail if any other press appears in it.
 - Every script checks that the parts it needs exist before it types or presses
   anything. A missing part raises `MusicUILayoutError` naming it, with a pointer to
-  `music-ui-inspect`.
+  `experimental-ui-inspect`.
 - Failures are sorted into two kinds. `MusicUILayoutError` means the window is not as
   expected, and ends the catalog step, since every later track would fail the same
   way. `MusicUIError` concerns one track (no results in time, the row gone, Add to
@@ -256,7 +275,7 @@ told it:
    an artist, scored by `match_track`. Album and duration are simply absent, which the
    matcher already handles by leaving those components out.
 2. A result at or above the accept threshold is chosen. One in the review band is put
-   to the user through `choose_catalog_result`; picking it authorises adding that
+   to the user through `choose_catalog_result` in `experimental.py`; picking it authorises adding that
    song, and nothing is remembered yet.
 3. `add_to_library` chooses Add to Library, or reports that Music shows the song as
    present.
@@ -267,11 +286,39 @@ told it:
    chosen result's own title and artist, because the user may have picked a different
    version on purpose.
 6. Only then is the mapping stored, with the library track's persistent ID, as `auto`
-   or `manual`. The result is marked `from_catalog` for the report and otherwise
-   behaves like any other match.
+   or `manual`. From then on it is an ordinary remembered library match; nothing
+   records that it came from the catalog.
 
 A song that was added but never confirmed is left out and not remembered, and the
 report says it stays in the library. With `--dry-run` the sequence stops after step 2.
+
+`experimental-catalog-fill` runs this for the tracks of an export that the library
+lacks. It writes no playlist: once a song is in the library, an ordinary `sync` finds
+it there like any other. That is the whole connection between the two sides, and it
+runs through the library, not through code.
+
+### Adding straight to a playlist: tried, not adopted
+
+An experiment on 2026-10-07, with Music's "Add songs to Library when adding to
+playlists" setting off, added a catalog song to `Spotify Daily Mix TEST` through the
+More menu's Add to Playlist submenu, without it entering the library.
+
+| Question | Finding |
+| --- | --- |
+| Does it work? | Yes. The playlist gained the track at once, with no dialog; the library did not change |
+| What does AppleScript see? | A `shared track` with full title, artist, album and duration, cloud status `subscription`, a persistent ID and a database ID. `kind` and `album artist` are empty, unlike a library track |
+| Where can it be found? | Only inside that playlist. Looking the ID up in the library or at application level finds nothing; searching the playlist finds it |
+| Can the existing code read and verify it? | `playlist_tracks()` reads it and the order check passes. `has_track`/`get_track` report it missing, and `add_tracks` cannot re-add it, because both look in the library |
+| Can AppleScript remove it? | Yes, with no effect on the library |
+| Is its ID durable? | No. Removing it and adding the same catalog song again gave a different persistent ID and database ID, with identical metadata |
+
+So the persistent ID of such a track names one playlist entry, not a song. Supporting
+this would mean remembering something other than a persistent ID, updating playlists
+without emptying them, verifying against the playlist instead of the library, a
+restore that does not rely on re-adding from the library, and letting the window
+automation choose a second menu item. Track order is the hard part: Music's
+dictionary has no command to reorder tracks within a playlist. Whether AppleScript
+can `duplicate` a playlist-only entry was not tested.
 
 ## Normalization
 
@@ -339,7 +386,8 @@ All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
   the table can be read by a person.
 - A stored mapping is a cache hit only if `get_track` still finds its track; the
   live track is what gets used. If the track is gone, the mapping is logged, deleted
-  and the track is matched from scratch. This also means a made-up mock ID could not
+  and the track is matched from scratch against the library as it is now; if nothing
+  suitable is there, it is left out. This also means a made-up mock ID could not
   survive in a real run even if one got into the real database.
 - Automatic matches and manual picks are stored. Tracks that need review, were
   skipped, or failed are evaluated again on the next run.
@@ -357,22 +405,24 @@ All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
   `osascript` that speaks the same reply format, imitates the behaviours listed above
   and can be told to fail on the n-th call of a given script. That is how the
   rollback paths are tested. A fixture also makes any attempt to start a real program
-  from a unit test fail. The Music window has its own stand-in, `tests/fake_ui.py`,
-  which answers searches from a fixed catalog and can delay, drop or alter what
-  arrives in the library. The window scripts are also tested as text, for what they
-  are allowed to do.
-- **Live tests of the app** (`tests/integration/`, marker `music_app`) drive the real
-  app through AppleScript and run only with `pytest --music-app`. They change one
-  playlist, `Spotify Daily Mix TEST`, including a full `sync` into it; they put its
+  from a unit test fail.
+- **`tests/test_library_only.py`** guards the shape of the supported workflow: no
+  module on the sync path imports the experimental code; `cli.py` does nothing with it
+  but register its commands; `sync` has no option that adds songs; the supported
+  commands run with tripwires in place of the window automation; a missing song is
+  left out and the run still succeeds.
+- **Live tests** (`tests/integration/`, marker `music_app`) drive the real app through
+  AppleScript and run only with `pytest --music-app`. They change one playlist,
+  `Spotify Daily Mix TEST`, including a full library-only `sync` into it; they put its
   contents back afterwards, never delete it, and assert that the library and every
   other playlist are unchanged.
-- **Live tests of the window** (marker `music_ui`) operate the real Music window and
-  run only with `pytest --music-ui`. They change nothing: layout check, catalog
-  search, menu reading, and "add" on a song already present. Adding a new song is
-  left to `music-catalog-add-test`, since it cannot be undone automatically.
+- **Experimental.** The catalog code has unit tests against a stand-in for the Music
+  window (`tests/fake_ui.py`), tests that read the window scripts as text for what
+  they are allowed to do, and six read-only live tests behind their own switch,
+  `pytest --music-ui`.
 
 ## Deliberately absent
 
 No server, no web framework, no ORM, no async, no plugin system, no Apple API client
-and no credential handling. No screen coordinates or image matching in the window
-automation, and no UI automation for anything AppleScript can do.
+and no credential handling. In the supported workflow: no UI automation, no
+Accessibility permission, and no way to add a song to the library.

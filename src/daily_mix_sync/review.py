@@ -5,14 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 
-from typing import TYPE_CHECKING
-
 from .database import MappingStore
 from .matcher import MatchResult, MatchStatus, ScoredCandidate
 from .models import MANUAL
-
-if TYPE_CHECKING:
-    from .catalog import CatalogLookup
 
 
 def _clock(duration_ms: int | None) -> str:
@@ -42,7 +37,7 @@ def _show_question(
     show(" q. Quit review\n")
 
 
-def _ask(
+def ask_selection(
     candidates: Sequence[ScoredCandidate], ask: Callable[[str], str], show: Callable[[str], None]
 ) -> ScoredCandidate | str:
     """Return the picked candidate, or "skip" or "quit"."""
@@ -58,35 +53,6 @@ def _ask(
         if answer.isdigit() and 1 <= int(answer) <= len(candidates):
             return candidates[int(answer) - 1]
         show(f"Enter a number from 1 to {len(candidates)}, s to skip, or q to quit.")
-
-
-def choose_catalog_result(
-    lookup: CatalogLookup,
-    ask: Callable[[str], str] | None = None,
-    show: Callable[[str], None] | None = None,
-) -> ScoredCandidate | str:
-    """Ask which Apple Music catalog result to add for a track; "skip" or "quit" otherwise.
-
-    Picking a result authorises adding that one song to the library. Nothing is
-    remembered here: the mapping is stored only once the song is in the library.
-    """
-    ask = input if ask is None else ask
-    show = print if show is None else show
-    track = lookup.track
-    show("\nApple Music catalog match required\n")
-    show("Source:")
-    for line in (track.title, track.artist, track.album or "(album unknown)"):
-        show(f"   {line}")
-    show(f"   {_clock(track.duration_ms)}")
-    show("\nCatalog results (the results page shows no album or duration):")
-    for index, scored in enumerate(lookup.match.candidates, start=1):
-        row = lookup.row(scored)
-        show(f"\n{index:2d}. {row.title}")
-        show(f"    {row.artist}")
-        show(f"    Score: {scored.score:.1f}  ({scored.explain()})")
-    show("\n s. Skip")
-    show(" q. Stop catalog resolution\n")
-    return _ask(lookup.match.candidates, ask, show)
 
 
 def review_results(
@@ -108,7 +74,7 @@ def review_results(
     for number, index in enumerate(pending, start=1):
         result = reviewed[index]
         _show_question(result, number, len(pending), show)
-        answer = _ask(result.candidates, ask, show)
+        answer = ask_selection(result.candidates, ask, show)
         if answer == "quit":
             break
         if isinstance(answer, ScoredCandidate):

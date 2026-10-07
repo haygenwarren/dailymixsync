@@ -1,4 +1,8 @@
-"""Operate the Music window itself, through macOS Accessibility (System Events).
+"""EXPERIMENTAL: operate the Music window itself, through macOS Accessibility.
+
+Not part of the supported workflow. `sync`, `match` and `review` never import or call
+this module, and need no Accessibility permission. It is reached through the
+experimental-* commands alone.
 
 AppleScript cannot search the Apple Music catalog or add a song that is not in the
 library, so those two things are done the way a person would: the sidebar's Search
@@ -40,7 +44,7 @@ from .music_app import (
 
 LAYOUT_HINT = (
     "The Music window may have changed with an update. To see what is there now, run: "
-    "python -m daily_mix_sync music-ui-inspect"
+    "python -m daily_mix_sync experimental-ui-inspect"
 )
 
 # Error numbers raised by the scripts below.

@@ -1,4 +1,7 @@
-"""The whole sync path against the real Music app: export file -> library -> playlist.
+"""The whole library-only sync path against the real Music app: export -> library -> playlist.
+
+This is the supported workflow. It uses AppleScript only: no window automation, no
+Accessibility permission, and nothing is added to the library.
 
 Skipped unless pytest is run with --music-app. The export is named "Daily Mix TEST",
 so the only playlist written is "Spotify Daily Mix TEST". The mapping database is a
@@ -15,6 +18,11 @@ pytestmark = [pytest.mark.music_app, pytest.mark.usefixtures("test_playlist")]
 
 TEST = "Spotify Daily Mix TEST"
 MISSING = {"title": "Zzqqxx Notarealsongtitle", "artist": "Nobody At All"}
+
+
+def row(label, count):
+    """One line of the summary of a run against the Music library."""
+    return f"{label + ':':<25}{count:>4}\n"
 
 
 def as_entry(song, number):
@@ -55,21 +63,23 @@ def test_dry_run_changes_nothing(music, songs, sync):
     entries = [as_entry(song, n) for n, song in enumerate(songs)]
     code, out, _ = sync(entries, "--dry-run")
     assert code == 0
-    assert "Destination:      Spotify Daily Mix TEST" in out
+    assert "\nDestination:\nSpotify Daily Mix TEST\n" in out
     assert "No changes made (--dry-run)." in out
     assert music.playlist_tracks(TEST) == before
 
 
-def test_sync_writes_library_songs_in_order_and_skips_what_is_missing(music, songs, sync):
+def test_sync_writes_library_songs_in_order_and_skips_what_is_missing(music, songs, sync, baseline):
     first, second, third = songs
     entries = [as_entry(third, 3), MISSING, as_entry(first, 1), as_entry(second, 2)]
     code, out, err = sync(entries, "--yes")
     assert (code, err) == (0, "")
-    assert "Not in library:      1" in out
+    assert row("Not in library", 1) in out
+    assert "\nNot in your Music library, so left out:\n" in out
     assert "Zzqqxx Notarealsongtitle — Nobody At All" in out
-    assert "Verified:           3 / 3, in order" in out
+    assert row("New tracks", 3) in out
     assert "✓ Playlist updated and verified." in out
     assert in_playlist(music) == described([third, first, second])
+    assert music.library_size() == baseline["library size"]  # nothing was added for the missing one
 
 
 def test_second_sync_reuses_the_cache_and_replaces_the_contents(music, songs, sync):
@@ -80,8 +90,8 @@ def test_second_sync_reuses_the_cache_and_replaces_the_contents(music, songs, sy
     # The same three source tracks, in a new order, one of them twice removed.
     code, out, _ = sync([as_entry(second, 2), as_entry(third, 3)], "--yes")
     assert code == 0
-    assert "Cached matches:      2" in out and "New matches:         0" in out
-    assert "Cleared old tracks: 3" in out and "Added new tracks:   2" in out
+    assert row("Cached library matches", 2) + row("New library matches", 0) in out
+    assert row("Previous tracks", 3) + row("New tracks", 2) in out
     assert in_playlist(music) == described([second, third])
     assert music.find_playlist(TEST).persistent_id == playlist_id  # emptied, not recreated
 
@@ -97,7 +107,7 @@ def test_sync_without_confirmation_leaves_the_playlist_alone(music, songs, sync,
 def test_sync_with_nothing_in_the_library_leaves_the_playlist_alone(music, sync):
     before = music.playlist_tracks(TEST)
     code, _, err = sync([MISSING], "--yes")
-    assert code == 1 and "none of the 1 track(s) could be matched" in err
+    assert code == 1 and "none of the 1 track(s) are in your Music library" in err
     assert music.playlist_tracks(TEST) == before
 
 

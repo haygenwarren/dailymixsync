@@ -130,7 +130,7 @@ def test_a_row_without_a_catalog_id_still_works_as_a_handle():
 
 
 def test_a_malformed_row_is_a_layout_error_not_a_guess():
-    with pytest.raises(MusicUILayoutError, match="Unexpected song row.*music-ui-inspect"):
+    with pytest.raises(MusicUILayoutError, match="Unexpected song row.*experimental-ui-inspect"):
         MusicCatalogUI(run=Runner({music_ui._SEARCH: "only-one-field"})).search_catalog("x")
 
 
@@ -178,7 +178,7 @@ def test_window_failures_are_sorted_into_kinds(message, code, kind, stops_the_st
     assert isinstance(caught.value, MusicUILayoutError) is stops_the_step
     text = str(caught.value)
     assert "AppleScript error" not in text
-    assert ("python -m daily_mix_sync music-ui-inspect" in text) is stops_the_step
+    assert ("python -m daily_mix_sync experimental-ui-inspect" in text) is stops_the_step
     assert message.split(".")[0][:40] in text
 
 

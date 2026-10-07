@@ -27,7 +27,8 @@ class Settings:
     search_limit: int = 10  # candidates requested per search
     # Only playlists named this, or this plus a space and more, are ever changed.
     managed_playlist_prefix: str = DEFAULT_MANAGED_PREFIX
-    # How long to wait for a song added from the catalog to show up in the library.
+    # Experimental catalog commands only: how long to wait for a song added from the
+    # catalog to show up in the library. Normal sync never adds songs.
     catalog_wait_s: int = 30
     matching: MatchConfig = field(default_factory=MatchConfig)
 

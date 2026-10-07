@@ -1,4 +1,8 @@
-"""Resolving tracks through the catalog, with stand-ins for the Music window and library."""
+"""The experimental catalog step, with stand-ins for the Music window and library.
+
+Not part of normal sync: these cover catalog.py, which only the experimental-*
+commands reach.
+"""
 
 import pytest
 from fake_music import FakeMusic
@@ -90,6 +94,11 @@ def by_title(results):
     return {r.track.title: r for r in results}
 
 
+def added(report):
+    """Titles of the tracks the catalog step added to the library and resolved."""
+    return {track.title for track, _ in report.added}
+
+
 def problems(report):
     return {track.title: reason for track, reason in report.problems}
 
@@ -147,7 +156,7 @@ def test_wait_does_not_sleep_when_the_track_is_already_there(clock):
 def test_a_confident_catalog_match_is_added_validated_and_remembered(local, music, ui, store, fake):
     results, report = resolve_missing(local, music, ui, store, SETTINGS)
     brightside = by_title(results)["Mr. Brightside"]
-    assert brightside.status is MatchStatus.MATCHED and brightside.from_catalog
+    assert brightside.status is MatchStatus.MATCHED and "Mr. Brightside" in added(report)
     assert [r.catalog_id for r in ui.added][:1] == ["903"]  # first of the equal-scoring rows
     # What is used and remembered is the library track with its real persistent ID.
     assert brightside.chosen == AppleCandidate("LIB903", "Mr. Brightside", "The Killers", "Direct Hits", 223_973)
@@ -177,16 +186,16 @@ def test_tracks_needing_local_review_are_not_sent_to_the_catalog(music, ui, stor
 
 
 def test_studio_version_is_fetched_when_the_library_only_has_another_version(local, music, ui, store):
-    results, _ = resolve_missing(local, music, ui, store, SETTINGS)
+    results, report = resolve_missing(local, music, ui, store, SETTINGS)
     creep = by_title(results)["Creep"]
-    assert creep.from_catalog and creep.chosen.persistent_id == "LIB906"
+    assert "Creep" in added(report) and creep.chosen.persistent_id == "LIB906"
     assert [r.catalog_id for r in ui.added if r.title.startswith("Creep")] == ["906"]
 
 
 def test_no_matching_song_in_the_catalog_is_reported_not_guessed(local, music, ui, store):
     results, report = resolve_missing(local, music, ui, store, SETTINGS)
     nothing = by_title(results)["Not There"]
-    assert nothing.status is MatchStatus.FAILED and not nothing.from_catalog
+    assert nothing.status is MatchStatus.FAILED and "Not There" not in added(report)
     assert problems(report)["Not There"].startswith("no matching song in the catalog")
     assert store.get("spotify:track:s5") is None
 
@@ -218,7 +227,8 @@ def test_a_manual_catalog_choice_is_added_and_remembered_as_manual(local, music,
     results, report = resolve_missing(local, music, ui, store, SETTINGS, choose=choose)
     assert asked == ['Let It Go - From "Frozen"']  # only the ambiguous one is asked about
     let_it_go = by_title(results)['Let It Go - From "Frozen"']
-    assert let_it_go.status is MatchStatus.MANUAL and let_it_go.from_catalog
+    assert let_it_go.status is MatchStatus.MANUAL
+    assert 'Let It Go - From "Frozen"' in added(report)
     assert let_it_go.chosen.persistent_id == "LIB905"
     mapping = store.get("spotify:track:s3")
     assert (mapping.persistent_id, mapping.method, mapping.score) == ("LIB905", MANUAL, 80)
@@ -247,14 +257,13 @@ def test_skipping_a_catalog_choice_adds_nothing(local, music, ui, store):
     assert problems(report)['Let It Go - From "Frozen"'] == "catalog results were skipped in review"
     assert all(r.title != "Let It Go" for r in ui.added)
     assert store.get("spotify:track:s3") is None
-    assert by_title(results)["Creep"].from_catalog  # later tracks still handled
+    assert "Creep" in added(report)  # later tracks still handled
 
 
 def test_quitting_the_catalog_review_stops_the_step_and_keeps_earlier_work(local, music, ui, store):
     results, report = resolve_missing(local, music, ui, store, SETTINGS, choose=lambda lookup: QUIT)
     assert report.stopped == "stopped at your request"
-    assert by_title(results)["Mr. Brightside"].from_catalog  # resolved before the question
-    assert not by_title(results)["Creep"].from_catalog  # never reached
+    assert added(report) == {"Mr. Brightside"}  # resolved before the question; Creep never reached
     assert "creep radiohead" not in ui.searches
 
 
@@ -314,7 +323,8 @@ def test_music_saying_the_song_is_already_there_adds_nothing_twice(local, music,
 def test_add_to_library_not_being_offered_fails_that_track_only(local, music, ui, store):
     ui.fail_add = MusicUIError("The song result's menu offers neither Add to Library nor Delete from Library.")
     results, report = resolve_missing(local, music, ui, store, SETTINGS)
-    assert not any(r.from_catalog for r in results)
+    assert added(report) == set()
+    assert [r.status for r in results] == [r.status for r in local]
     assert "offers neither Add to Library" in problems(report)["Mr. Brightside"]
     assert "offers neither Add to Library" in problems(report)["Creep"]  # carried on to the next
     assert report.stopped == ""
@@ -323,9 +333,9 @@ def test_add_to_library_not_being_offered_fails_that_track_only(local, music, ui
 def test_one_failed_search_does_not_stop_the_others(local, music, ui, store):
     ui.fail_search["mr brightside killers"] = MusicUIError("Apple Music showed no results within 15 seconds.")
     results, report = resolve_missing(local, music, ui, store, SETTINGS)
-    assert not by_title(results)["Mr. Brightside"].from_catalog
+    assert "Mr. Brightside" not in added(report)
     assert problems(report)["Mr. Brightside"] == "Apple Music showed no results within 15 seconds."
-    assert by_title(results)["Creep"].from_catalog
+    assert "Creep" in added(report)
     assert report.stopped == ""
 
 
@@ -333,9 +343,9 @@ def test_an_unexpected_window_layout_ends_the_step_before_more_is_tried(local, m
     ui.fail_search["let it go idina menzel"] = MusicUILayoutError("The search field was not found in Music's toolbar.")
     results, report = resolve_missing(local, music, ui, store, SETTINGS)
     assert report.stopped == "The search field was not found in Music's toolbar."
-    assert by_title(results)["Mr. Brightside"].from_catalog  # done before the failure
+    assert added(report) == {"Mr. Brightside"}  # done before the failure; nothing after it
     assert ui.searches == ["mr brightside killers", "let it go idina menzel"]  # nothing after
-    assert not by_title(results)["Creep"].from_catalog
+    assert by_title(results)["Creep"].status is MatchStatus.FAILED
 
 
 def test_dry_run_searches_but_adds_and_remembers_nothing(local, music, ui, store, fake):
@@ -366,6 +376,6 @@ def test_once_remembered_a_track_never_needs_the_window_again(local, music, ui, 
 def test_a_song_added_earlier_is_found_in_the_library_without_the_window(music, ui, store, fake):
     fake.library["LIB904"] = CATALOG[3].as_library_track()  # as if added on an earlier day
     results = match_playlist(Playlist("Mix", (WANT_BRIGHTSIDE,)), music, store, SETTINGS)
-    assert results[0].status is MatchStatus.MATCHED and not results[0].from_catalog
-    resolve_missing(results, music, ui, store, SETTINGS)
-    assert ui.searches == [] and ui.added == []
+    assert results[0].status is MatchStatus.MATCHED
+    _, report = resolve_missing(results, music, ui, store, SETTINGS)
+    assert ui.searches == [] and ui.added == [] and report.added == []

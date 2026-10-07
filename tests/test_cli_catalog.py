@@ -1,4 +1,8 @@
-"""sync --catalog and the Music-window commands, against stand-ins for Music and its window."""
+"""The experimental catalog commands, against stand-ins for Music and its window.
+
+These commands are not part of normal sync. They are the only way to reach the
+catalog code, and the only commands that can add a song to the Music library.
+"""
 
 import builtins
 import json
@@ -8,7 +12,7 @@ import pytest
 from fake_music import FakeMusic, FakePlaylist
 from fake_ui import CatalogSong, FakeCatalogUI
 
-from daily_mix_sync import catalog, cli
+from daily_mix_sync import catalog, cli, experimental
 from daily_mix_sync.models import AppleCandidate
 from daily_mix_sync.music_app import MusicApp
 from daily_mix_sync.music_ui import MusicUIError, MusicUILayoutError
@@ -32,8 +36,8 @@ TRACKS = [
 DEST = "Spotify Daily Mix 1"
 LIKED = "Spotify Liked Songs"
 LIBRARY_ONLY = ["B1", "E1"]
-WITH_CATALOG = ["B1", "LIB903", "E1"]  # Mr. Brightside lands where the export had it
-WITH_CATALOG_REVIEW = ["B1", "LIB903", "LIB905", "E1"]
+AFTER_FILL = ["B1", "LIB903", "E1"]  # Mr. Brightside lands where the export had it
+FILL = "experimental-catalog-fill"
 
 
 @pytest.fixture
@@ -53,7 +57,7 @@ def fake(tmp_path, monkeypatch):
 @pytest.fixture
 def ui(fake, monkeypatch):
     ui = FakeCatalogUI(fake, CATALOG)
-    monkeypatch.setattr(cli, "_catalog_ui", lambda: ui)
+    monkeypatch.setattr(experimental, "_catalog_ui", lambda: ui)
     return ui
 
 
@@ -97,213 +101,184 @@ def remembered(tmp_path):
             "SELECT source_key, music_persistent_id, method FROM mappings")}
 
 
-# --- sync: the flag -------------------------------------------------------------
+# --- filling the library from an export -------------------------------------------
 
 
-@pytest.mark.parametrize("flags", [(), ("--no-catalog",)])
-def test_without_the_flag_the_music_window_is_never_touched(fake, ui, export, capsys, flags):
-    code, out, _ = run(capsys, "sync", export(), "--yes", *flags)
-    assert code == 0
-    assert ui.searches == [] and ui.sessions == 0 and ui.added == []
-    assert fake.playlist(DEST).track_ids == LIBRARY_ONLY
-    assert "Not in library:      3\n" in out
-    assert "From catalog" not in out
-    assert "`sync --catalog` looks for them there." in out
-
-
-def test_catalog_flag_adds_missing_songs_and_writes_them_where_they_belong(
+def test_fill_adds_the_missing_songs_to_the_library_and_touches_no_playlist(
     fake, ui, export, capsys, tmp_path
 ):
-    code, out, err = run(capsys, "sync", export(), "--yes", "--catalog")
+    code, out, err = run(capsys, FILL, export(), "--yes")
     assert (code, err) == (0, "")
-    assert fake.playlist(DEST).track_ids == WITH_CATALOG
-    assert [r.catalog_id for r in ui.added] == ["903"]
-    assert "Searching the Apple Music catalog for 3 track(s)." in out
+    assert out.startswith("EXPERIMENTAL, not part of normal sync.")
+    assert "can add songs to your Music library; the tool cannot remove them again." in out
+    assert "Daily Mix 1: 3 of 5 track(s) are not in your library." in out
+    assert "  - Mr. Brightside — The Killers\n" in out
     assert (
-        "Tracks found:        5\n"
-        "Cached matches:      0\n"
-        "New matches:         2\n"
-        "From catalog:        1\n"
-        "Needs review:        0\n"
-        "Not in library:      2\n"
-    ) in out
-    assert (
-        "\nAdded to your library from the Apple Music catalog:\n"
+        "\nAdded to your library (1):\n"
         "  Mr. Brightside — The Killers  →  Mr. Brightside — The Killers\n"
     ) in out
     assert (
-        "\nNot in the Music library:\n"
+        "\nNot added (2):\n"
         '  Let It Go - From "Frozen" — Idina Menzel\n'
-        "      catalog: the catalog's closest result needs review (Let It Go, score 80.0)\n"
+        "      the catalog's closest result needs review (Let It Go, score 80.0)\n"
         "  Not There — Nobody\n"
-        "      catalog: no matching song in the catalog"
+        "      no matching song in the catalog"
     ) in out
-    assert "Verified:           3 / 3, in order" in out
+    assert "To put them in the playlist: sync " in out
+    assert [r.catalog_id for r in ui.added] == ["903"] and "LIB903" in fake.library
     assert remembered(tmp_path)["spotify:track:s2"] == ("LIB903", "auto")
-    assert ui.sessions == 1 and ui.handed_back == 1  # Music was given back afterwards
+    assert fake.changes() == []  # no playlist was created or changed
+    assert ui.sessions == 1 and ui.handed_back == 1  # the screen was given back
 
 
-def test_catalog_songs_are_resolved_before_the_playlist_is_touched(fake, ui, export, capsys):
-    fake.playlists.append(FakePlaylist("DEST000000000001", DEST, ["E1"]))
-    run(capsys, "sync", export(), "--yes", "--catalog")
-    assert "LIB903" in fake.library
-    first_change = fake.changes()[0]
-    assert first_change[1][1] == DEST  # the only thing changed through AppleScript
-    assert fake.playlist(DEST).track_ids == WITH_CATALOG
+def test_a_normal_sync_afterwards_uses_what_was_added_without_the_window(fake, ui, export, capsys):
+    run(capsys, FILL, export(), "--yes")
+    ui.searches.clear()
+    ui.sessions = 0
+    code, out, _ = run(capsys, "sync", export(), "--yes")
+    assert code == 0
+    assert fake.playlist(DEST).track_ids == AFTER_FILL  # in export order
+    assert ui.searches == [] and ui.sessions == 0 and len(ui.added) == 1
+    assert "✓ Playlist updated and verified." in out
 
 
-def test_later_syncs_use_the_cache_and_leave_the_window_alone_for_those_songs(
-    fake, ui, export, capsys
-):
-    run(capsys, "sync", export(), "--yes", "--catalog")
+def test_fill_again_searches_only_for_what_is_still_missing(fake, ui, export, capsys):
+    run(capsys, FILL, export(), "--yes")
     ui.searches.clear()
     ui.added.clear()
-    code, out, _ = run(capsys, "sync", export(), "--yes", "--catalog")
+    code, out, _ = run(capsys, FILL, export(), "--yes")
     assert code == 0
-    assert "Cached matches:      3\n" in out and "From catalog:        0\n" in out
-    assert ui.added == []
-    assert ui.searches == ["let it go idina menzel", "not there nobody"]
-    assert fake.playlist(DEST).track_ids == WITH_CATALOG
-
-    ui.searches.clear()
-    run(capsys, "sync", export(), "--yes")  # and without the flag, not at all
-    assert ui.searches == []
+    assert "Daily Mix 1: 2 of 5 track(s) are not in your library." in out
+    assert ui.searches == ["let it go idina menzel", "not there nobody"] and ui.added == []
+    assert out.rstrip().endswith("Nothing was added.")
 
 
-def test_catalog_with_nothing_missing_does_not_open_a_session(fake, ui, export, capsys):
-    code, _, _ = run(capsys, "sync", export(tracks=[TRACKS[0], TRACKS[4]]), "--yes", "--catalog")
-    assert code == 0 and ui.sessions == 0 and ui.searches == []
+def test_fill_with_nothing_missing_does_not_take_the_screen(fake, ui, export, capsys):
+    code, out, _ = run(capsys, FILL, export(tracks=[TRACKS[0], TRACKS[4]]), "--yes")
+    assert code == 0 and "Nothing to look for." in out
+    assert ui.sessions == 0 and ui.searches == []
 
 
-# --- sync: dry run --------------------------------------------------------------
+def test_fill_asks_before_adding_anything(fake, ui, export, capsys, keyboard):
+    prompts = keyboard("n")
+    code, out, _ = run(capsys, FILL, export(), "--no-review")
+    assert code == 1 and ui.added == [] and ui.searches == []
+    assert prompts == [
+        "\nLook for these 3 in the Apple Music catalog and add the matches to your Music "
+        "library? [y/N] "
+    ]
+    assert out.rstrip().endswith("Nothing was added.")
+
+    keyboard("y")
+    code, _, _ = run(capsys, FILL, export(), "--no-review")
+    assert code == 0 and len(ui.added) == 1
 
 
-def test_dry_run_with_catalog_shows_what_it_would_add_and_adds_nothing(
-    fake, ui, export, capsys, tmp_path
-):
+def test_fill_without_yes_and_nobody_to_ask_adds_nothing(fake, ui, export, capsys):
+    code, _, err = run(capsys, FILL, export())
+    assert code == 1 and "error: not confirmed. Adding songs to your library needs a yes" in err
+    assert ui.added == [] and ui.searches == []
+
+
+def test_fill_dry_run_shows_what_it_would_add_and_adds_nothing(fake, ui, export, capsys, tmp_path, keyboard):
+    prompts = keyboard("y", "1")
     before = dict(fake.library)
-    code, out, _ = run(capsys, "sync", export(), "--dry-run", "--catalog")
+    code, out, _ = run(capsys, FILL, export(), "--dry-run")
     assert code == 0
+    assert prompts == []  # a dry run asks nothing
     assert ui.added == [] and fake.library == before and fake.changes() == []
-    assert "Would add:           1\n" in out and "Not in library:      2\n" in out
     assert (
-        "\nWould add from the Apple Music catalog:\n"
+        "\nWould add to your library (1):\n"
         "  Mr. Brightside — The Killers  →  Mr. Brightside — The Killers\n"
     ) in out
-    assert "New contents:     2 of 5 track(s), in playlist order" in out
-    assert "plus 1 that would be added from the catalog" in out
     assert out.rstrip().endswith("No changes made (--dry-run).")
-    assert "spotify:track:s2" not in remembered(tmp_path)  # nothing to remember yet
-    assert all(p.name != DEST for p in fake.playlists)
+    assert "spotify:track:s2" not in remembered(tmp_path)
 
 
-def test_dry_run_with_catalog_asks_nothing(fake, ui, export, capsys, keyboard):
-    prompts = keyboard("1", "y")
-    run(capsys, "sync", export(), "--dry-run", "--catalog")
-    assert prompts == [] and ui.added == []
-
-
-# --- sync: permission and failures ----------------------------------------------
-
-
-def test_missing_accessibility_permission_stops_before_anything_changes(fake, ui, export, capsys):
+def test_fill_needs_accessibility_and_stops_before_anything(fake, ui, export, capsys):
     ui.allowed = False
-    fake.playlists.append(FakePlaylist("DEST000000000001", DEST, ["E1"]))
-    code, out, err = run(capsys, "sync", export(), "--yes", "--catalog")
+    code, out, err = run(capsys, FILL, export(), "--yes")
     assert code == 1
     assert err.startswith(
         "error: Searching the Apple Music catalog needs macOS Accessibility permission."
     )
     assert "System Settings → Privacy & Security → Accessibility" in err
-    assert ui.searches == [] and ui.sessions == 0
-    assert fake.changes() == [] and fake.playlist(DEST).track_ids == ["E1"]
-    assert "✓" not in out
+    assert ui.searches == [] and ui.sessions == 0 and fake.changes() == []
 
 
-def test_one_song_failing_in_the_window_does_not_stop_the_sync(fake, ui, export, capsys):
-    ui.fail_add = MusicUIError("The song result's More menu did not open.")
-    code, out, _ = run(capsys, "sync", export(), "--yes", "--catalog")
+def test_one_song_failing_in_the_window_does_not_stop_the_others(fake, ui, export, capsys):
+    ui.fail_search["mr brightside killers"] = MusicUIError("Apple Music showed no results within 15 seconds.")
+    code, out, _ = run(capsys, FILL, export(), "--yes")
     assert code == 0
-    assert fake.playlist(DEST).track_ids == LIBRARY_ONLY
-    assert "      catalog: The song result's More menu did not open." in out
-    assert "✓ Playlist updated and verified." in out
+    assert "  Mr. Brightside — The Killers\n      Apple Music showed no results within 15 seconds." in out
+    assert "not there nobody" in ui.searches  # the rest were still tried
 
 
-def test_an_unexpected_window_layout_is_reported_and_the_rest_still_syncs(fake, ui, export, capsys):
+def test_an_unexpected_window_layout_ends_the_step_and_is_explained(fake, ui, export, capsys):
     ui.fail_search["mr brightside killers"] = MusicUILayoutError(
         "The search field was not found in Music's toolbar. The Music window may have changed "
-        "with an update. To see what is there now, run: python -m daily_mix_sync music-ui-inspect"
+        "with an update. To see what is there now, run: python -m daily_mix_sync experimental-ui-inspect"
     )
-    code, out, _ = run(capsys, "sync", export(), "--yes", "--catalog")
+    code, out, _ = run(capsys, FILL, export(), "--yes")
     assert code == 0
     assert "The catalog step ended early: The search field was not found in Music's toolbar." in out
-    assert "python -m daily_mix_sync music-ui-inspect" in out
     assert ui.searches == ["mr brightside killers"]  # nothing more was tried
-    assert fake.playlist(DEST).track_ids == LIBRARY_ONLY
 
 
-def test_a_song_that_never_reaches_the_library_is_left_out_and_said_so(fake, ui, export, capsys, tmp_path):
+def test_a_song_that_never_reaches_the_library_is_reported(fake, ui, export, capsys, tmp_path):
     ui.appear_after = 10_000
-    code, out, _ = run(capsys, "sync", export(), "--yes", "--catalog")
+    code, out, _ = run(capsys, FILL, export(), "--yes")
     assert code == 0
-    assert fake.playlist(DEST).track_ids == LIBRARY_ONLY
     assert "was added to the library, but no track matching it well enough appeared" in out
     assert "the song stays in your library" in out
     assert "spotify:track:s2" not in remembered(tmp_path)
 
 
-# --- sync: choosing a catalog result by hand ------------------------------------
-
-
 def test_ambiguous_catalog_results_are_asked_about_and_the_choice_is_manual(
     fake, ui, export, capsys, keyboard, tmp_path
 ):
-    prompts = keyboard("1", "y")
-    code, out, _ = run(capsys, "sync", export(), "--catalog")
+    prompts = keyboard("y", "1")
+    code, out, _ = run(capsys, FILL, export())
     assert code == 0
-    assert prompts[0] == "Selection: " and prompts[1].startswith("\nCreate 'Spotify Daily Mix 1'")
+    assert prompts[0].startswith("\nLook for these 3") and prompts[1] == "Selection: "
     assert "Apple Music catalog match required" in out
     assert "Source:\n   Let It Go - From \"Frozen\"\n   Idina Menzel" in out
     assert "\n 1. Let It Go\n    Idina Menzel\n    Score: 80.0" in out
     assert " q. Stop catalog resolution" in out
-    assert fake.playlist(DEST).track_ids == WITH_CATALOG_REVIEW
     assert remembered(tmp_path)["spotify:track:s3"] == ("LIB905", "manual")
-    assert "From catalog:        2\n" in out and "Manual matches" not in out
+    assert "\nAdded to your library (2):\n" in out
     # The question is answered in the terminal, so Music is handed back first.
     assert ui.handed_back == 2
 
 
 def test_skipping_the_catalog_question_leaves_the_song_out(fake, ui, export, capsys, keyboard):
-    keyboard("s", "y")
-    code, out, _ = run(capsys, "sync", export(), "--catalog")
+    keyboard("y", "s")
+    code, out, _ = run(capsys, FILL, export())
     assert code == 0
-    assert fake.playlist(DEST).track_ids == WITH_CATALOG
-    assert "      catalog: catalog results were skipped in review" in out
+    assert "      catalog results were skipped in review" in out
+    assert [r.catalog_id for r in ui.added] == ["903"]
 
 
-def test_stopping_catalog_resolution_keeps_what_was_done_and_still_offers_the_write(
-    fake, ui, export, capsys, keyboard
-):
-    keyboard("q", "y")
-    code, out, _ = run(capsys, "sync", export(), "--catalog")
+def test_stopping_catalog_resolution_keeps_what_was_done(fake, ui, export, capsys, keyboard):
+    keyboard("y", "q")
+    code, out, _ = run(capsys, FILL, export())
     assert code == 0
     assert "The catalog step ended early: stopped at your request" in out
-    assert fake.playlist(DEST).track_ids == WITH_CATALOG
+    assert [r.catalog_id for r in ui.added] == ["903"]
     assert "not there nobody" not in ui.searches
 
 
-def test_no_review_also_silences_the_catalog_question(fake, ui, export, capsys, keyboard):
+def test_no_review_silences_the_catalog_question(fake, ui, export, capsys, keyboard):
     prompts = keyboard("y")
-    code, _, _ = run(capsys, "sync", export(), "--catalog", "--no-review")
+    code, _, _ = run(capsys, FILL, export(), "--no-review")
     assert code == 0 and len(prompts) == 1
-    assert fake.playlist(DEST).track_ids == WITH_CATALOG
 
 
-# --- music-ui-inspect -----------------------------------------------------------
+# --- experimental-ui-inspect ------------------------------------------------------
 
 
 def test_inspect_lists_what_the_automation_relies_on(fake, ui, capsys):
-    code, out, _ = run(capsys, "music-ui-inspect")
+    code, out, _ = run(capsys, "experimental-ui-inspect")
     assert code == 0
     assert "  ok       main window: Music, 1 window(s) in all\n" in out
     assert "  note     Songs section: not present" in out
@@ -313,14 +288,14 @@ def test_inspect_lists_what_the_automation_relies_on(fake, ui, capsys):
 
 def test_inspect_reports_missing_parts_and_fails(fake, ui, capsys):
     ui.layout = [("ok", "main window", "Music"), ("missing", "search field", "not found in the toolbar")]
-    code, out, _ = run(capsys, "music-ui-inspect")
+    code, out, _ = run(capsys, "experimental-ui-inspect")
     assert code == 1
     assert "  MISSING  search field: not found in the toolbar\n" in out
     assert "1 expected part(s) not found." in out
 
 
 def test_inspect_can_list_every_element(fake, ui, capsys):
-    code, out, _ = run(capsys, "music-ui-inspect", "--dump")
+    code, out, _ = run(capsys, "experimental-ui-inspect", "--dump")
     assert code == 0
     assert "Every element under the toolbar (2):\n  group 1 of toolbar\n  button Search of group 1 of toolbar\n" in out
     assert "Every element under the pane (2):" in out
@@ -328,16 +303,16 @@ def test_inspect_can_list_every_element(fake, ui, capsys):
 
 def test_inspect_needs_accessibility(fake, ui, capsys):
     ui.allowed = False
-    code, _, err = run(capsys, "music-ui-inspect")
+    code, _, err = run(capsys, "experimental-ui-inspect")
     assert code == 1 and "Accessibility" in err and ui.sessions == 0
 
 
-# --- music-catalog-search -------------------------------------------------------
+# --- experimental-catalog-search --------------------------------------------------
 
 
 def test_catalog_search_shows_scored_results_and_changes_nothing(fake, ui, capsys):
     before = dict(fake.library)
-    code, out, _ = run(capsys, "music-catalog-search", "Mr. Brightside", "The Killers")
+    code, out, _ = run(capsys, "experimental-catalog-search", "Mr. Brightside", "The Killers")
     assert code == 0
     assert out.startswith("Apple Music catalog search\n\nLooking for: Mr. Brightside — The Killers -:--\n")
     assert "Query:       mr brightside killers" in out
@@ -349,18 +324,21 @@ def test_catalog_search_shows_scored_results_and_changes_nothing(fake, ui, capsy
 
 
 def test_catalog_search_exit_code_says_whether_a_confident_match_exists(fake, ui, capsys):
-    code, out, _ = run(capsys, "music-catalog-search", 'Let It Go - From "Frozen"', "Idina Menzel")
+    code, out, _ = run(capsys, "experimental-catalog-search", 'Let It Go - From "Frozen"', "Idina Menzel")
     assert code == 1 and "Result: needs a choice by hand (best score 80.0" in out
-    code, out, _ = run(capsys, "music-catalog-search", "Qwertyuiop", "Asdfghjkl")
+    code, out, _ = run(capsys, "experimental-catalog-search", "Qwertyuiop", "Asdfghjkl")
     assert code == 1 and "Results: none" in out and "Result: nothing found." in out
 
 
-# --- music-catalog-add-test -----------------------------------------------------
+# --- experimental-catalog-add-test ------------------------------------------------
+
+ADD = "experimental-catalog-add-test"
 
 
 def test_add_test_adds_one_song_and_prints_its_persistent_id(fake, ui, capsys):
-    code, out, _ = run(capsys, "music-catalog-add-test", "Mr. Brightside", "The Killers", "--yes")
+    code, out, _ = run(capsys, ADD, "Mr. Brightside", "The Killers", "--yes")
     assert code == 0
+    assert out.startswith("EXPERIMENTAL, not part of normal sync.")
     assert "Add to Library was chosen in Music." in out
     assert "The library now has: Mr. Brightside — The Killers [Direct Hits] 3:44" in out
     assert "Persistent ID:       LIB903" in out
@@ -372,32 +350,32 @@ def test_add_test_adds_one_song_and_prints_its_persistent_id(fake, ui, capsys):
 
 def test_add_test_asks_first(fake, ui, capsys, keyboard):
     prompts = keyboard("n")
-    code, out, _ = run(capsys, "music-catalog-add-test", "Mr. Brightside", "The Killers")
+    code, out, _ = run(capsys, ADD, "Mr. Brightside", "The Killers")
     assert code == 1 and ui.added == []
     assert prompts == ["\nAdd 'Mr. Brightside' by 'The Killers' to your Music library? [y/N] "]
     assert out.rstrip().endswith("Nothing was added.")
 
     keyboard("y")
-    code, _, _ = run(capsys, "music-catalog-add-test", "Mr. Brightside", "The Killers")
+    code, _, _ = run(capsys, ADD, "Mr. Brightside", "The Killers")
     assert code == 0 and len(ui.added) == 1
 
 
 def test_add_test_without_yes_and_nobody_to_ask_adds_nothing(fake, ui, capsys):
-    code, _, err = run(capsys, "music-catalog-add-test", "Mr. Brightside", "The Killers")
+    code, _, err = run(capsys, ADD, "Mr. Brightside", "The Killers")
     assert code == 1 and "error: not confirmed." in err and ui.added == []
 
 
 def test_add_test_refuses_when_there_is_no_confident_match(fake, ui, capsys):
-    code, out, _ = run(capsys, "music-catalog-add-test", "Not There", "Nobody", "--yes")
+    code, out, _ = run(capsys, ADD, "Not There", "Nobody", "--yes")
     assert code == 1 and out.rstrip().endswith("Nothing was added.") and ui.added == []
     # Ambiguous, and nobody to choose: also nothing.
-    code, out, _ = run(capsys, "music-catalog-add-test", 'Let It Go - From "Frozen"', "Idina Menzel", "--yes")
+    code, out, _ = run(capsys, ADD, 'Let It Go - From "Frozen"', "Idina Menzel", "--yes")
     assert code == 1 and ui.added == []
 
 
 def test_add_test_lets_a_person_choose_among_ambiguous_results(fake, ui, capsys, keyboard):
     keyboard("1", "y")
-    code, out, _ = run(capsys, "music-catalog-add-test", 'Let It Go - From "Frozen"', "Idina Menzel")
+    code, out, _ = run(capsys, ADD, 'Let It Go - From "Frozen"', "Idina Menzel")
     assert code == 0
     assert "Apple Music catalog match required" in out
     assert "Persistent ID:       LIB905" in out
@@ -406,7 +384,7 @@ def test_add_test_lets_a_person_choose_among_ambiguous_results(fake, ui, capsys,
 def test_add_test_does_not_add_a_song_music_already_has(fake, ui, capsys):
     ui.in_library_ids.add("903")
     fake.library["LIB903"] = CATALOG[1].as_library_track()
-    code, out, _ = run(capsys, "music-catalog-add-test", "Mr. Brightside", "The Killers", "--yes")
+    code, out, _ = run(capsys, ADD, "Mr. Brightside", "The Killers", "--yes")
     assert code == 0 and ui.added == []
     assert "Music shows this song as already in your library; nothing was added." in out
     assert "Persistent ID:       LIB903" in out
@@ -414,6 +392,6 @@ def test_add_test_does_not_add_a_song_music_already_has(fake, ui, capsys):
 
 def test_add_test_reports_a_song_that_does_not_show_up(fake, ui, capsys):
     ui.appear_after = 10_000
-    code, _, err = run(capsys, "music-catalog-add-test", "Mr. Brightside", "The Killers", "--yes")
+    code, _, err = run(capsys, ADD, "Mr. Brightside", "The Killers", "--yes")
     assert code == 1
     assert "error: no matching track showed up in the library within 30 seconds." in err

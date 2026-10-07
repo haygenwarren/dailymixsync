@@ -7,7 +7,7 @@ front while they run, so leave the Mac alone until they finish.
 They change nothing: they search the Apple Music catalog, read results and menus,
 and try "add" only on a song Music already shows as being in the library, where it
 must do nothing. Adding a song that is not in the library is not tested here,
-because it cannot be undone automatically; `music-catalog-add-test` does that by hand.
+because it cannot be undone automatically; `experimental-catalog-add-test` does that by hand.
 """
 
 import pytest

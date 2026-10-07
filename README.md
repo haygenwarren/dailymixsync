@@ -1,17 +1,24 @@
 # Daily Mix Sync
 
-A personal, Mac-only tool that recreates Spotify Daily Mix playlists in Apple Music.
-It works from **track metadata only** (title, artist, album, duration). No audio is
-downloaded, copied or transferred.
+A personal, Mac-only tool that recreates Spotify Daily Mix playlists in Apple Music,
+**using only songs that are already in your Apple Music library**. It works from
+track metadata (title, artist, album, duration). No audio is downloaded, copied or
+transferred.
 
 ```
-source track → remembered match, if its song is still in the library
-             → else search the local Music library                      (AppleScript)
-             → else, with --catalog: search the Apple Music catalog     (Music window)
-                    add the match to the library                        (Music window)
-                    wait until the library shows it, then check it      (AppleScript)
-             → remember the match → write the managed playlist          (AppleScript)
+Spotify Daily Mix
+→ track metadata
+→ matching against your local Apple Music library
+→ a Daily Mix playlist made of the songs you already have
 ```
+
+Songs in a Daily Mix that are not in your library are **left out on purpose**. Nothing
+is ever added to your library by a sync. That is the design, for four reasons:
+
+- it keeps your Apple Music library clean;
+- it avoids adding unfamiliar songs automatically;
+- it makes the sync path much simpler and more reliable;
+- it needs no UI automation, only AppleScript.
 
 Apple Music is reached by driving the **Music app on this Mac**, which is already
 signed in to your subscription. There is no Apple Developer Program membership, no
@@ -21,13 +28,10 @@ MusicKit, no API key or token, and no hosted service.
 
 | Piece | State |
 | --- | --- |
-| Local-library matching, with cache and manual review | Working, tested against the real app |
-| Apple Music catalog fallback for songs not in the library (`sync --catalog`) | Working, tested against the real app |
-| Playlist sync: write, verify, roll back on failure | Working, tested against the real app |
+| Matching against your Music library, with cache and manual review | Working, tested against the real app |
+| Library-only playlist sync: write, verify, roll back on failure | Working, tested against the real app |
 | Spotify browser extractor | Not built. The export file has to come from elsewhere for now |
-
-The Apple Music side is complete. What is missing is the Spotify side: something to
-produce the export file.
+| Adding songs you do not have, from the Apple Music catalog | Not part of sync. Kept as [experimental commands](#experimental-apple-music-catalog-support) only |
 
 ## Requirements
 
@@ -35,8 +39,8 @@ produce the export file.
 - **Python 3.12** or newer.
 - Music **signed in** to an Apple Music subscription, with Sync Library on, so that
   catalog songs can live in your library and in playlists.
-- **Automation permission** for the app you run the tool from, and **Accessibility
-  permission** as well if you use the catalog fallback; see [Permissions](#permissions).
+- **Automation permission** for the app you run the tool from; see
+  [Permissions](#permissions). Nothing else: a sync needs no Accessibility permission.
 
 ## Setup
 
@@ -91,9 +95,6 @@ python -m daily_mix_sync sync data/daily_mix_1.json
 
 # Later, unattended: no questions.
 python -m daily_mix_sync sync data/daily_mix_1.json --yes
-
-# Also fetch songs you do not have yet from the Apple Music catalog.
-python -m daily_mix_sync sync data/daily_mix_1.json --catalog
 ```
 
 For a first try that cannot touch a playlist you care about, send the result to the
@@ -106,53 +107,54 @@ python -m daily_mix_sync sync data/daily_mix_1.json --into "Spotify Daily Mix TE
 What `sync` does, in this order:
 
 1. Reads the export and works out the destination playlist.
-2. For each track, uses the remembered match if its song is still in the library;
-   otherwise searches the library and scores the candidates.
-3. Asks you about the ambiguous ones, if someone is at the keyboard.
-4. With `--catalog`, looks in the Apple Music catalog for what is still missing and
-   adds the matches to your library; see
-   [Songs that are not in your library](#songs-that-are-not-in-your-library).
-5. Prints the summary, including what could not be found.
+2. For each track, uses the remembered match if its song is still in your library.
+3. Otherwise searches your library and scores the candidates. A confident match is
+   accepted and remembered.
+4. Asks you about the ambiguous ones, if someone is at the keyboard.
+5. Leaves out every track that is not in your library, and lists them.
 6. Asks for confirmation (skipped with `--yes`).
-7. Records what the playlist holds, empties it, adds the new songs in export order.
+7. Records what the playlist holds, empties it, adds the matched songs in Spotify order.
 8. Reads the playlist back and compares it, song for song and in order.
 9. If anything in steps 7 and 8 failed, puts the recorded contents back.
 
-Everything that can go wrong with matching happens before step 7, so a problem there
-never leaves a playlist half-written.
+It never adds a song to your library, never searches the Apple Music catalog, and
+never operates the Music window. Everything that can go wrong with matching happens
+before step 7, so a problem there never leaves a playlist half-written.
 
 ```
 Daily Mix 1
 -----------
-Tracks found:        50
-Cached matches:      23
-New matches:         19
-Manual matches:       2
-Needs review:         0
-Not in library:       6
+Tracks in Spotify export:  50
+Cached library matches:    18
+New library matches:       15
+Manual matches:             3
+Not in library:            14
 
-Not in the Music library:
-  Song A — Artist A
-  Song B — Artist B  (closest: Song B (Live), score 70.0)
+Not in your Music library, so left out:
+  - Song A — Artist A
+  - Song B — Artist B  (closest: Song B (Live), score 70.0)
   ...
-  The Apple Music catalog was not searched for these. `sync --catalog` looks for them there.
+  Only songs already in your library are used. Nothing is added to it.
 
-Destination:      Spotify Daily Mix 1  (48 track(s) now)
-New contents:     44 of 50 track(s), in playlist order
+Destination:
+Spotify Daily Mix 1
 
-Cleared old tracks: 48
-Added new tracks:   44
-Verified:           44 / 44, in order
+Previous tracks:           35
+New tracks:                36
 
 ✓ Playlist updated and verified.
 ```
 
+A track that is not in your library is not an error: the command still succeeds and
+the playlist simply has fewer songs than the Daily Mix. "Closest" appears when your
+library has the song only in another version, such as a live recording, which is not
+accepted as a match.
+
 | Option | Meaning |
 | --- | --- |
-| `--dry-run` | Match and report only. Creates, empties and adds nothing, and asks nothing. Matches found in the library are still remembered. With `--catalog` it searches the catalog and lists what it would add, without adding. |
+| `--dry-run` | Match and report only. Creates, empties and adds nothing, and asks nothing. Matches found are still remembered. |
 | `--yes` | Do not ask before replacing the playlist's contents. |
-| `--no-review` | Do not ask about ambiguous songs, in the library or the catalog; leave them out. |
-| `--catalog` | Look in the Apple Music catalog for songs the library lacks and add the matches to your library. Off unless you ask for it (`--no-catalog` is the default). |
+| `--no-review` | Do not ask about ambiguous songs; leave them out. |
 | `--into NAME` | Write to this managed playlist instead of the one named after the export. |
 | `--db FILE` | Mapping database. Default: `database_path` from the settings. |
 | `--details` | List every matched song and the track chosen for it. |
@@ -165,102 +167,21 @@ The result always starts with the prefix, so nothing in an export can point the 
 at one of your own playlists, and `--into` is refused for any name that is not
 managed.
 
-**Order and duplicates.** Songs are written in export order. A song that cannot be
-resolved is left out and the rest keep their relative order. Exact duplicate entries
-in the export are dropped when it is read (and counted in the summary); two different
-entries that turn out to be the same song in your library are both written.
+**Order and duplicates.** Songs are written in Spotify order. A song that is left out
+does not disturb the order of the rest. Exact duplicate entries in the export are
+dropped when it is read (and counted in the summary); two different entries that turn
+out to be the same song in your library are both written.
 
 **Confirmation.** Without `--yes`, `sync` asks before replacing anything. If there is
 no one to ask (input is not a terminal), it stops without changing anything.
 
-**When nothing matches.** If no track can be resolved, `sync` reports an error and
-leaves the playlist alone. Unresolved tracks are otherwise not an error.
+**When nothing matches.** If not one track is in your library, `sync` reports an error
+and leaves the playlist alone rather than emptying it.
 
 **If the write fails.** The previous contents are put back and the command reports
 both the failure and the restore, with exit code 1. Music has no transactions, so this
 is a best effort: if the restore fails too, the command says manual intervention is
 needed and lists what the playlist held.
-
-## Songs that are not in your library
-
-AppleScript cannot search the Apple Music catalog, so for songs you do not have yet
-the tool operates the Music window the way you would: it selects Search in the
-sidebar, switches the scope to Apple Music, types the query, reads the Songs results,
-and for the one it settles on opens the More menu and chooses **Add to Library**.
-From there on it is back to AppleScript.
-
-```sh
-python -m daily_mix_sync sync data/daily_mix_1.json --catalog
-```
-
-For each track the library could not supply:
-
-1. **Search.** The query is the base title plus the primary artist, the same one used
-   for the library.
-2. **Score.** The results are scored by the same matcher as library candidates. The
-   results page shows title and artist only, so album and duration play no part yet.
-3. **Choose.** A result at or above the accept threshold (90) is chosen. Results in
-   the review band (75 to 90) are put to you, if someone is at the keyboard. Anything
-   lower is not added.
-4. **Add.** "Add to Library" is chosen for that one result. If Music shows the song as
-   already in your library, nothing is added.
-5. **Wait.** The library is searched about once a second, for up to `catalog_wait_s`
-   (30) seconds, until the song shows up there.
-6. **Check.** The library track now has an album and a duration, so it is scored
-   against the export's track again, in full. Only if it still qualifies is it used
-   and remembered, under its Music persistent ID, exactly like any other match.
-
-On later runs that song is found in the library or the cache, and the window is not
-used for it.
-
-```
-Searching the Apple Music catalog for 2 track(s). Music will come to the front; please
-leave the Mac alone until it hands back.
-Daily Mix 1
------------
-Tracks found:         5
-Cached matches:       3
-New matches:          0
-From catalog:         1
-Needs review:         0
-Not in library:       1
-
-Added to your library from the Apple Music catalog:
-  Killing In The Name — Rage Against The Machine  →  Killing In The Name — Rage Against the Machine
-
-Not in the Music library:
-  A Song That Is Not There — Nobody At All
-      catalog: no matching song in the catalog; closest was ..., score 33.6
-```
-
-What to know before using it:
-
-- **It is opt-in.** Without `--catalog`, the window is never touched and songs you do
-  not have are simply left out, as before.
-- **It takes over the screen.** macOS only lets a program see the Music window while
-  Music is in front on the visible desktop, so Music comes forward for the duration
-  and the app you were in comes back afterwards. A search takes a few seconds per
-  track. **Do not use the Mac while it runs**: the query is typed with real keystrokes.
-  The tool checks that Music's search field has the keyboard immediately before it
-  types and before it presses Return, and stops if it does not, but switching apps at
-  that instant could still send keystrokes elsewhere.
-- **It adds songs to your library and does not take them out.** Every song it adds
-  stays, including one that then fails the check in step 6 and is left out of the
-  playlist (the summary says so when that happens). Remove such a song by hand in
-  Music if you do not want it.
-- **It may pick a different release of the same recording.** With no album on the
-  results page, the first result with the right title and artist wins, which is
-  Apple's top hit and often a compilation rather than the original album.
-- **A dry run adds nothing.** `sync --dry-run --catalog` searches the catalog and lists
-  what it would add.
-- **One failure does not sink the run.** A song that cannot be found, added or
-  confirmed is reported with the reason and left out; the rest carry on. If the Music
-  window itself is not laid out as expected, the catalog step stops, says so, and the
-  sync continues with what it has.
-
-The only things the window automation ever does are search, read results, and choose
-"Add to Library". It never chooses another menu item, never deletes anything, and
-never touches a playlist; playlists are written through AppleScript only.
 
 ## Reviewing ambiguous songs
 
@@ -308,6 +229,9 @@ asking. Nothing is ever picked for you.
 
 To be asked about weaker candidates as well, lower `review_threshold` in the settings.
 
+Review only ever offers songs that are already in your library. If none of them is
+right, skip: the track is left out. There is no catalog search here.
+
 ## Other commands
 
 Run everything from the repository root; relative paths such as `data/` are resolved
@@ -341,7 +265,7 @@ Each track ends up in one of these states:
 | New match | Best candidate scored at or above `auto_accept_threshold` (90); remembered. |
 | Manual match | You picked a candidate during review in this run; remembered as `manual`. |
 | Needs review | Best candidate scored between `review_threshold` (75) and 90; nothing stored. |
-| Not in library | No search results, or the best candidate scored below 75; nothing stored. With a mock catalog this row is called Failed. |
+| Not in library | No search results, or the best candidate scored below 75. The track is left out and nothing is stored. With a mock catalog this row is called Failed. |
 
 Problems with the input, the settings, the database or Music are reported as a
 one-line `error: ...` on stderr with exit code 1.
@@ -360,7 +284,7 @@ python -m daily_mix_sync music-clear-test [--delete]
 
 | Command | What it does | Changes Music? |
 | --- | --- | --- |
-| `music-test` | Checks Music can be reached (starting it if needed) and prints its version, library size and managed playlists. Also says whether window control (Accessibility) is permitted. | No |
+| `music-test` | Checks Music can be reached (starting it if needed) and prints its version, library size and managed playlists. | No |
 | `music-playlists` | Lists your playlists, marking smart ones, folders and managed ones. | No |
 | `music-find` | Searches your library for one song and shows every candidate with its score. Exit code 0 only for a confident match. | No |
 | `music-add-test` | Finds the song the same way and, only on a confident match, adds it to `Spotify Daily Mix TEST`, creating that playlist if needed. Then re-reads the playlist to confirm. | Only the TEST playlist |
@@ -376,26 +300,6 @@ Library search 'nutshell alice in chains': 2 candidate(s)
          ... -30.0 version mismatch: live
 Result: match (score 100.0; accepted from 90).
 ```
-
-### Music window commands
-
-These exercise the catalog automation on its own. All of them bring Music to the front
-while they run and need Accessibility permission.
-
-```sh
-python -m daily_mix_sync music-ui-inspect [--dump]
-python -m daily_mix_sync music-catalog-search "Dreams" "Fleetwood Mac" [--album NAME] [--duration 4:17]
-python -m daily_mix_sync music-catalog-add-test "Song" "Artist" [--yes]
-```
-
-| Command | What it does | Changes Music? |
-| --- | --- | --- |
-| `music-ui-inspect` | Checks that the Music window has every part the automation relies on and lists them. `--dump` also lists every element of the toolbar and main pane. Exit code 1 if something is missing. | Selects Search in the sidebar; nothing else |
-| `music-catalog-search` | Searches the Apple Music catalog for one song and prints the results with their scores, best first. Exit code 0 only if one would be chosen. | Leaves the search on screen; adds nothing |
-| `music-catalog-add-test` | Does the same search, asks before adding (unless `--yes`), chooses Add to Library for the match, waits for it to show up, and prints its persistent ID. | **Adds one song to your library.** No playlist is touched |
-
-`music-catalog-add-test` is for a song you deliberately pick as a test. There is no
-command to take it out again; delete it in Music if you do not want to keep it.
 
 ## Playlist export format
 
@@ -439,7 +343,7 @@ cp config.example.json config.json    # config.json is git-ignored
 | `database_path` | `data/mappings.sqlite3` | Mapping database for runs against your Music library. |
 | `search_limit` | 10 | Candidates requested per search. |
 | `managed_playlist_prefix` | `Spotify Daily Mix` | The only playlists the tool may change; see [Playlist safety](#playlist-safety). |
-| `catalog_wait_s` | 30 | How long to wait for a song added from the catalog to show up in the library. |
+| `catalog_wait_s` | 30 | Experimental catalog commands only: how long to wait for an added song to show up in the library. Not used by `sync`. |
 | `matching.auto_accept_threshold` | 90 | Accept automatically at or above this score. |
 | `matching.review_threshold` | 75 | Offer for review at or above this score. |
 | `matching.weight_title` / `_artist` / `_album` / `_duration` | 0.45 / 0.35 / 0.10 / 0.10 | Share of each similarity in the score. |
@@ -469,7 +373,9 @@ A `manual` mapping is never overwritten by an `auto` one.
 
 A remembered match is only trusted while its song is still in the library. Each run
 looks every remembered song up again; one that has gone is reported, removed from the
-cache, and matched from scratch. The summary then shows a `Stale mappings` line.
+cache, and matched from scratch against the library as it is now. If nothing suitable
+is there any more, the track is left out like any other missing song. The summary
+then shows a `Stale mappings` line.
 
 To look at the cache:
 
@@ -486,26 +392,25 @@ upgraded in place the first time it is opened.
 
 ## Tests
 
-There are three kinds, kept apart.
-
 **Unit tests** need nothing but Python and never touch Music:
 
 ```sh
 python -m pytest
 ```
 
-600 tests: normalization, scoring, the SQLite store, input validation, config, the
+625 tests: normalization, scoring, the SQLite store, input validation, config, the
 mock catalog, cache validation, manual review, playlist writing with verification and
-rollback, catalog resolution, the CLI, the Music adapter and the Music-window module.
-Everything that would talk to Music runs against in-memory stand-ins: one for
-`osascript` (`tests/fake_music.py`), which can be told to fail at a chosen point, and
-one for the Music window (`tests/fake_ui.py`). Tests also read the window scripts
-themselves to check what they are allowed to do: that Add to Library is the only menu
-item ever chosen, and that nothing is typed without the keyboard check. As a backstop,
-a unit test that tries to start any real program fails on the spot.
+rollback, the CLI and the Music adapter. Everything that would talk to Music runs
+against an in-memory stand-in for `osascript` (`tests/fake_music.py`), which can be
+told to fail at a chosen point. One file, `tests/test_library_only.py`, pins down the
+supported workflow itself: that nothing on the sync path imports the experimental
+code, that `sync` has no option to add songs, that the supported commands never reach
+the Music window or ask about Accessibility, and that a missing song is left out
+rather than reported as a failure. As a backstop, a unit test that tries to start any
+real program fails on the spot.
 
-**Live tests of the Music app** drive it through AppleScript and are skipped unless
-you ask for them:
+**Live tests of the library-only workflow** drive the real Music app through
+AppleScript and are skipped unless you ask for them:
 
 ```sh
 python -m pytest tests/integration --music-app
@@ -516,22 +421,11 @@ python -m pytest tests/integration --music-app
 export. Afterwards its contents are put back exactly as they were found, and the
 tests check that your library size and every other playlist are unchanged. They use a
 temporary mapping database, so your real cache is not touched. They never delete the
-test playlist; if they had to create it, it is left in place, empty. They need the
-Automation permission below.
+test playlist; if they had to create it, it is left in place, empty. They need only
+the Automation permission below.
 
-**Live tests of the Music window** operate it through Accessibility, and have their
-own switch:
-
-```sh
-python -m pytest tests/integration --music-ui
-```
-
-6 tests, under a minute, with Music in front the whole time; leave the Mac alone while
-they run. They change nothing: they check the window's layout, search the catalog,
-read results and menus, and try "add" only on a song Music already shows as being in
-your library, where it must do nothing. Adding a song you do not have is not
-automated as a test, because it cannot be undone automatically; use
-`music-catalog-add-test` for that. They need both permissions below.
+The experimental catalog code has its own unit tests, included in the 625, and its
+own live switch; see [the experimental section](#experimental-apple-music-catalog-support).
 
 ## How Spotify extraction will work
 
@@ -547,15 +441,10 @@ Spotify-specific DOM selectors will be kept in one place.
 
 ## Music app integration
 
-Everything Music-specific is in two modules. `music_app.py` runs AppleScript through
-`osascript` and does all the reading and all the playlist writing. `music_ui.py`
-operates the Music window through Accessibility and does only what AppleScript cannot:
-searching the Apple Music catalog and adding a song from it.
-
-Each AppleScript command used was read from the scripting dictionary of the installed
-app (`Music.app/Contents/Resources/com.apple.Music.sdef`) and then tried against the
-real app; each part of the window that is relied on was read from the installed app's
-accessibility tree. Nothing was taken from old iTunes examples or tutorials.
+Everything a sync says to Music is in one module, `music_app.py`, which runs
+AppleScript through `osascript`. Each command it uses was read from the scripting
+dictionary of the installed app (`Music.app/Contents/Resources/com.apple.Music.sdef`)
+and then tried against the real app. Nothing was taken from old iTunes examples.
 
 ### No Apple credentials
 
@@ -579,11 +468,8 @@ On macOS 26.3.1 with Music 1.6.3, through the adapter:
 | Match a whole export against the library, with cache and stale-entry handling | Works |
 | Review an ambiguous song and have the choice remembered | Works |
 | Replace a playlist's contents in export order, then read back and compare | Works; the playlist keeps its identity |
-| Search the Apple Music catalog, or add a song that is not in the library | **Not possible through AppleScript.** The dictionary has no such command; done through the Music window instead |
-| Search the catalog through the Music window and read title and artist of the song results | Works |
-| Add one catalog song to the library through its More menu, then find it through AppleScript | Works; the song was visible to AppleScript within about ten seconds, with its own persistent ID |
-| Repeat that for a song already in the library | Nothing is added; Music's menu shows it as present |
-| `sync --catalog`: library songs, one catalog song and one nonexistent song in a single run | Works; the playlist was written in export order and verified, the missing song left out |
+| Search the Apple Music catalog, or add a song that is not in the library | **Not possible through AppleScript.** The dictionary has no such command. Sync does not need it |
+| A complete library-only `sync`: matched songs written in Spotify order, missing ones left out, library size unchanged | Works |
 
 A song has the same persistent ID in the library and in every playlist it is in, which
 is what makes that ID usable as the cached mapping.
@@ -658,7 +544,8 @@ The `music-*` commands and the live tests only ever use `Spotify Daily Mix TEST`
 macOS asks before one app may control another. The permission belongs to the app you
 run the tool **from**: Terminal, iTerm, Visual Studio Code, and so on.
 
-### Automation (needed now)
+`validate` needs no permission at all. `match`, `review`, `sync` and the `music-*`
+commands need exactly one: **Automation**, to control Music.
 
 The first time the tool talks to Music, macOS shows a prompt along the lines of
 "Terminal wants access to control Music". Choose **Allow**.
@@ -680,83 +567,28 @@ If the app is not listed at all, the prompt was never answered. Running any `mus
 command again should bring it back. If a command instead waits and then reports that
 Music did not answer, look for a permission prompt hidden behind another window.
 
-### Accessibility (needed only for the catalog fallback)
-
-Anything that operates the Music window needs a second permission: `sync --catalog`,
-`music-ui-inspect`, `music-catalog-search` and `music-catalog-add-test`. Everything
-else works without it.
-
-1. Open **System Settings → Privacy & Security → Accessibility**.
-2. Add the app you run the tool from, and switch it on.
-
-This is a broad permission: it lets that app operate any window on your Mac, not only
-Music. Grant it to the terminal you actually run the tool from, and switch it off
-again if you stop using the catalog fallback.
-
-`music-test` reports the current state on its last line, either
-`Window control: permitted` or:
-
-```
-Window control: not permitted. Only needed for songs that are not in your library:
-                System Settings → Privacy & Security → Accessibility
-```
-
-Without it, the commands above stop before doing anything with:
-
-```
-error: Searching the Apple Music catalog needs macOS Accessibility permission. macOS
-has not allowed this program to operate other apps' windows. Open System Settings →
-Privacy & Security → Accessibility, ...
-```
-
-The tool checks once and stops; it does not keep trying.
-
-## After a macOS or Music update
-
-The catalog fallback depends on how the Music window is built, and that can change
-with an update. Everything it knows about the window is in one file,
-`src/daily_mix_sync/music_ui.py`, and `ARCHITECTURE.md` records the layout it was
-written against (Music 1.6.3, macOS 26.3).
-
-If catalog search stops working:
-
-1. Run `python -m daily_mix_sync music-ui-inspect`. It lists each part the automation
-   needs and marks anything it cannot find as `MISSING`.
-2. Run it again with `--dump` to see every element that is there now, under the names
-   System Events gives them.
-3. Compare with the layout table in `ARCHITECTURE.md` and adjust the matching handler
-   at the top of `music_ui.py`. Nothing outside that file knows about the window.
-4. Run `python -m pytest tests/integration --music-ui` to confirm.
-
-Until then, `sync` without `--catalog` is unaffected: it does not use the window.
+**Accessibility permission is not needed** for anything above. Only the
+[experimental catalog commands](#experimental-apple-music-catalog-support) use it. If
+you granted it earlier and do not use those commands, you can switch it off again.
 
 ## Known limitations
 
+- **Only songs already in your Music library are synced.** This is the design, not a
+  gap: the rest of a Daily Mix is left out and listed.
 - There is no Spotify extractor yet, so the export file has to be written by hand or
   produced some other way.
-- **The catalog fallback is the fragile part.** It depends on the layout of the Music
-  window, which an update can change; see
-  [After a macOS or Music update](#after-a-macos-or-music-update). It also:
-  - assumes Music is in English: it looks for the sidebar entry "Search", the scope
-    "Apple Music", the section "Songs" and the menu item "Add to Library" by name;
-  - needs Music in front and the Mac left alone while it runs;
-  - reads only the first screen of song results (nine in testing), not "see all";
-  - sees no album or duration before adding, so it may add a different release of the
-    right recording, and occasionally one that then fails the full check;
-  - types the query in plain ASCII (accents and punctuation are stripped first), so
-    titles in other scripts cannot be searched for;
-  - cannot take back a song it has added.
 - A song can be in your library and still not be found if Spotify and Apple Music
   credit a different primary artist: the library search needs every word of the title
   and of the first artist to be present.
+- A different version of a song (live, remix, acoustic, demo) is not accepted in place
+  of the one in the Daily Mix. It shows up as "closest" in the left-out list.
 - A song you skip in review is not remembered as skipped; you are asked again on the
   next run. `--no-review` avoids the questions.
-- A dry run still remembers the matches it finds in the library. It changes nothing
-  in Music.
+- A dry run still remembers the matches it finds. It changes nothing in Music.
 - The restore after a failed write is a best effort, not a transaction. It was tested
   with simulated failures, not by breaking the real Music app mid-write.
-- Scoring was tuned on hand-written fixtures and spot-checked against a real library
-  and real catalog results. Expect to adjust thresholds and penalties with wider use.
+- Scoring was tuned on hand-written fixtures and spot-checked against a real library.
+  Expect to adjust thresholds and penalties with wider use.
 - Explicit and clean versions of a track are not told apart.
 - A live recording is recognised from its title (`(Live)`, `- Live at …`), not from
   the album name alone.
@@ -767,8 +599,77 @@ Until then, `sync` without `--catalog` is unaffected: it does not use the window
 - For tracks without a Spotify ID, the cache key depends on the normalization rules.
   If those rules change, such a track is simply matched again.
 
+## Experimental: Apple Music catalog support
+
+**Not part of the supported workflow.** `sync` never does any of this. The code below
+is kept, isolated, for possible future work on songs you do not have. It is reachable
+only through commands whose names start with `experimental-`.
+
+It differs from everything else in the tool in two ways:
+
+- It operates the Music window through macOS Accessibility, so it needs that
+  permission and takes over the screen while it runs.
+- Two of its commands **add songs to your Music library**, and nothing in the tool can
+  take a song out again.
+
+```sh
+python -m daily_mix_sync experimental-ui-inspect [--dump]
+python -m daily_mix_sync experimental-catalog-search "Dreams" "Fleetwood Mac"
+python -m daily_mix_sync experimental-catalog-add-test "Song" "Artist" [--yes]
+python -m daily_mix_sync experimental-catalog-fill data/daily_mix_1.json [--dry-run] [--yes] [--no-review]
+```
+
+| Command | What it does | Changes Music? |
+| --- | --- | --- |
+| `experimental-ui-inspect` | Checks that the Music window has every part the automation relies on. `--dump` lists every element of the toolbar and main pane. Exit code 1 if something is missing. | Selects Search in the sidebar; nothing else |
+| `experimental-catalog-search` | Searches the Apple Music catalog for one song and prints the results with their scores. | Leaves the search on screen; adds nothing |
+| `experimental-catalog-add-test` | Does the same search, asks first (unless `--yes`), chooses Add to Library for the match, waits for it to show up, and prints its persistent ID. | **Adds one song to your library** |
+| `experimental-catalog-fill` | For an export, finds the tracks your library lacks, asks first, and adds the catalog matches to your library. A later ordinary `sync` then picks them up like any other library song. `--dry-run` only lists what it would add. | **Adds songs to your library**; touches no playlist |
+
+How it works, in short: select Search in the sidebar, switch the scope to Apple Music,
+type the query, read the Songs results (title and artist only; the page shows no album
+or duration), score them with the same matcher, open the chosen result's More menu and
+choose Add to Library, then go back to AppleScript and wait for the song to appear in
+the library before trusting it. Add to Library is the only menu item it ever chooses.
+
+Before using any of it:
+
+- **Accessibility permission** is required: System Settings → Privacy & Security →
+  Accessibility, add the app you run the tool from. It is a broad permission: it lets
+  that app operate any window on your Mac.
+- **Do not use the Mac while it runs.** macOS only shows the Music window to a program
+  while Music is in front, and the query is typed with real keystrokes. The tool
+  checks that Music's search field has the keyboard before typing, and stops if not.
+- **It assumes Music is in English** and reads only the first screen of song results.
+- **It can add a different release** of the right recording, since no album is shown
+  before adding, and a song it adds stays even if it then fails the full check.
+
+Its tests: unit tests against a stand-in for the Music window (`tests/fake_ui.py`),
+included in the default run, and six read-only live tests with their own switch,
+`python -m pytest tests/integration --music-ui`.
+
+**After a macOS or Music update** the window layout may change. Everything the code
+knows about it is in `src/daily_mix_sync/music_ui.py`, and `ARCHITECTURE.md` records
+the layout it was written against (Music 1.6.3, macOS 26.3). Run
+`experimental-ui-inspect` to see which expected part is missing, `--dump` to see what
+is there now, and adjust the matching handler at the top of that file. None of this
+can affect `sync`, which does not use the window.
+
+**What a later version would have to solve.** Two approaches were tried:
+
+- *Add to the library first* (what the commands above do). It works and the song gets
+  a durable identity, but it puts songs in your library, which is exactly what the
+  supported workflow avoids.
+- *Add straight to the playlist*, with Music's "Add songs to Library when adding to
+  playlists" setting off. It works and keeps the library clean, but a track added this
+  way has an identity only inside that playlist: its persistent ID changes every time
+  it is added, the library cannot see it, and AppleScript cannot put it back once the
+  playlist has been emptied. The cache and the empty-and-refill update would both need
+  to change before this could be supported.
+
 ## Next steps
 
 1. **Spotify extractor.** A Chrome extension that reads an open Daily Mix in the
    Spotify web player and saves it in the export format above, so the file no longer
-   has to be made by hand. This is the one piece left.
+   has to be made by hand. With it, the whole path from Spotify to a library-only
+   Apple Music playlist is covered.

@@ -1,4 +1,8 @@
-"""Resolve tracks through the Apple Music catalog when the library does not have them.
+"""EXPERIMENTAL: resolve tracks through the Apple Music catalog.
+
+Not part of the supported workflow. `sync` uses only songs already in the Music
+library and never calls this module; it is reached through the experimental-*
+commands alone. Using it adds songs to the Music library.
 
 The Music window is used for the two things AppleScript cannot do: search the
 catalog and add a song to the library. Everything else stays on the AppleScript
@@ -217,7 +221,6 @@ def resolve_missing(
                 status=MatchStatus.MANUAL if by_hand else MatchStatus.MATCHED,
                 chosen=found,
                 mapping=mapping,
-                from_catalog=True,
             )
             report.added.append((track, found))
             log.info("catalog %s -> %r (%s)", label, found.title, found.persistent_id)

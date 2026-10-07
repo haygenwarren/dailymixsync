@@ -78,6 +78,11 @@ def keyboard(monkeypatch):
     return answers
 
 
+def row(label, count):
+    """One line of the summary of a run against the Music library."""
+    return f"{label + ':':<25}{count:>4}\n"
+
+
 def run(capsys, *argv):
     code = cli.main(list(argv))
     captured = capsys.readouterr()
@@ -98,15 +103,16 @@ def test_match_searches_the_music_library_when_no_mock_is_given(fake, export, ca
     assert out.startswith(
         "Daily Mix 1\n"
         "-----------\n"
-        "Tracks found:        6\n"
-        "Cached matches:      0\n"
-        "New matches:         3\n"
-        "Needs review:        1\n"
-        "Not in library:      2\n"
+        + row("Tracks in Spotify export", 6)
+        + row("Cached library matches", 0)
+        + row("New library matches", 3)
+        + row("Needs review", 1)
+        + row("Not in library", 2)
     )
-    assert "\nNot in the Music library:\n" in out
-    assert "The Apple Music catalog was not searched for these." in out
-    assert out.rstrip().endswith("Catalog: Music library   Mappings: data/mappings.sqlite3")
+    assert "Failed" not in out  # a song you do not have is not a failure
+    assert "\nNot in your Music library, so left out:\n" in out
+    assert "Only songs already in your library are used. Nothing is added to it." in out
+    assert out.rstrip().endswith("Searched: your Music library   Mappings: data/mappings.sqlite3")
     assert stored(tmp_path) == {
         "spotify:track:s1": "A1", "spotify:track:s4": "B1", "spotify:track:s6": "E1",
     }
@@ -132,9 +138,9 @@ def test_second_match_uses_the_cache_and_reports_a_stale_entry(fake, export, cap
     del fake.library["B1"]  # Dreams leaves the library; only the live version remains
     code, out, err = run(capsys, "match", export())
     assert code == 0
-    assert "Cached matches:      2\nNew matches:         0\n" in out
-    assert "Not in library:      3\n" in out
-    assert "Stale mappings:      1\n" in out
+    assert row("Cached library matches", 2) + row("New library matches", 0) in out
+    assert row("Not in library", 3) in out
+    assert row("Stale mappings", 1) in out
     assert "1 remembered track(s) had left the library and were matched again" in out
     assert "'Dreams' by 'Fleetwood Mac': the remembered auto match (id B1) is no longer" in err
 
@@ -147,16 +153,16 @@ def test_review_command_remembers_the_choice(fake, export, capsys, keyboard, tmp
     code, out, _ = run(capsys, "review", export())
     assert code == 0
     assert "Needs review (1 of 1)" in out and " 1. Let It Go" in out
-    assert "Manual matches:      1\nNeeds review:        0\n" in out
+    assert row("Manual matches", 1) + row("Not in library", 2) in out
     with sqlite3.connect(tmp_path / "data" / "mappings.sqlite3") as conn:
-        row = conn.execute(
+        remembered = conn.execute(
             "SELECT music_persistent_id, method FROM mappings WHERE source_key = 'spotify:track:s2'"
         ).fetchone()
-    assert row == ("C1", "manual")
+    assert remembered == ("C1", "manual")
 
     code, out, _ = run(capsys, "review", export())
     assert out.startswith("Nothing needs review.\n")
-    assert "Cached matches:      4\n" in out
+    assert row("Cached library matches", 4) in out
 
 
 def test_review_command_works_offline_with_the_mock_catalog(
@@ -178,9 +184,11 @@ def test_review_command_works_offline_with_the_mock_catalog(
 def test_dry_run_reports_and_changes_nothing(fake, export, capsys, tmp_path):
     code, out, _ = run(capsys, "sync", export(), "--dry-run")
     assert code == 0
-    assert "New matches:         3\nNeeds review:        1\nNot in library:      2\n" in out
-    assert "Destination:      Spotify Daily Mix 1  (will be created)" in out
-    assert "New contents:     3 of 6 track(s), in playlist order" in out
+    assert row("New library matches", 3) + row("Needs review", 1) + row("Not in library", 2) in out
+    assert (
+        "\nDestination:\nSpotify Daily Mix 1\n\n"
+        "Previous tracks:         (new playlist)\n" + row("New tracks", 3)
+    ) in out
     assert out.rstrip().endswith("No changes made (--dry-run).")
     assert fake.changes() == []
     assert [p.name for p in fake.playlists] == [LIKED]  # not even created
@@ -191,7 +199,7 @@ def test_dry_run_against_an_existing_playlist_leaves_it_alone(fake, export, caps
     fake.playlists.append(FakePlaylist("DEST000000000001", DEST, ["D1", "B2"]))
     code, out, _ = run(capsys, "sync", export(), "--dry-run")
     assert code == 0
-    assert "Destination:      Spotify Daily Mix 1  (2 track(s) now)" in out
+    assert "\nDestination:\nSpotify Daily Mix 1\n\n" + row("Previous tracks", 2) + row("New tracks", 3) in out
     assert fake.changes() == []
     assert fake.playlist(DEST).track_ids == ["D1", "B2"]
 
@@ -212,26 +220,28 @@ def test_sync_writes_the_matched_tracks_in_source_order(fake, export, capsys):
     assert (code, err) == (0, "")
     assert fake.playlist(DEST).track_ids == AUTOMATIC
     assert fake.playlist(DEST).persistent_id == "DEST000000000001"  # same playlist as before
-    assert "\nNeeds review:\n  Let It Go" in out
+    assert "\nNeeds review:\n  - Let It Go" in out
     assert (
-        "\nNot in the Music library:\n"
-        "  Creep — Radiohead  (closest: Creep (Acoustic), score 52.6)\n"
-        "  Not There — Nobody\n"
+        "\nNot in your Music library, so left out:\n"
+        "  - Creep — Radiohead  (closest: Creep (Acoustic), score 52.6)\n"
+        "  - Not There — Nobody\n"
+        "  Only songs already in your library are used. Nothing is added to it.\n"
     ) in out
     assert "\n1 track(s) need review and are left out. To decide them, run:\n" in out
     assert "  python -m daily_mix_sync review " in out
     assert out.endswith(
-        "\nCleared old tracks: 2\n"
-        "Added new tracks:   3\n"
-        "Verified:           3 / 3, in order\n"
-        "\n✓ Playlist updated and verified.\n"
+        "\nDestination:\nSpotify Daily Mix 1\n\n"
+        + row("Previous tracks", 2)
+        + row("New tracks", 3)
+        + "\n✓ Playlist updated and verified.\n"
     )
 
 
 def test_sync_creates_the_playlist_when_it_does_not_exist(fake, export, capsys):
     code, out, _ = run(capsys, "sync", export(), "--yes")
     assert code == 0
-    assert "Created playlist:   Spotify Daily Mix 1\nAdded new tracks:   3\n" in out
+    assert "Previous tracks:         (new playlist)\n" + row("New tracks", 3) in out
+    assert out.endswith("\n✓ Playlist updated and verified.\n")
     assert fake.playlist(DEST).track_ids == AUTOMATIC
 
 
@@ -260,8 +270,8 @@ def test_second_sync_is_served_from_the_cache(fake, export, capsys):
     fake.calls.clear()
     code, out, _ = run(capsys, "sync", export(), "--yes")
     assert code == 0
-    assert "Cached matches:      3\nNew matches:         0\n" in out
-    assert "Cleared old tracks: 3\nAdded new tracks:   3\n" in out
+    assert row("Cached library matches", 3) + row("New library matches", 0) in out
+    assert row("Previous tracks", 3) + row("New tracks", 3) in out
     assert fake.playlist(DEST).track_ids == AUTOMATIC
     searched = [args[0] for script, args in fake.calls if script is music_app._SEARCH]
     assert sorted(searched) == ["creep radiohead", "let it go idina menzel", "not there nobody"]
@@ -273,8 +283,8 @@ def test_sync_drops_a_stale_mapping_and_writes_what_is_still_there(fake, export,
     fake.playlist(DEST).track_ids.remove("E1")  # ... and so leaves the playlist
     code, out, err = run(capsys, "sync", export(), "--yes")
     assert code == 0
-    assert "Stale mappings:      1\n" in out
-    assert "Not in library:      3\n" in out
+    assert row("Stale mappings", 1) in out
+    assert row("Not in library", 3) in out
     assert "the remembered auto match (id E1) is no longer in the library" in err
     assert fake.playlist(DEST).track_ids == ["A1", "B1"]
 
@@ -294,7 +304,7 @@ def test_exact_duplicate_entries_are_dropped_by_the_importer_and_reported(fake, 
     tracks = [TRACKS[0], TRACKS[3], TRACKS[0]]
     code, out, _ = run(capsys, "sync", export(tracks=tracks), "--yes")
     assert code == 0
-    assert "Tracks found:        2\n" in out and "Duplicates:          1\n" in out
+    assert row("Tracks in Spotify export", 2) in out and row("Duplicates", 1) in out
     assert fake.playlist(DEST).track_ids == ["A1", "B1"]
 
 
@@ -315,7 +325,7 @@ def test_sync_asks_before_replacing_and_proceeds_on_yes(fake, export, capsys, ke
     code, out, _ = run(capsys, "sync", export(), "--no-review")
     assert code == 0
     assert prompts == ["\nReplace the contents of 'Spotify Daily Mix 1'? [y/N] "]
-    assert "Destination:      Spotify Daily Mix 1  (1 track(s) now)" in out
+    assert row("Previous tracks", 1) + row("New tracks", 3) in out
     assert fake.playlist(DEST).track_ids == AUTOMATIC
 
 
@@ -372,7 +382,7 @@ def test_sync_asks_about_ambiguous_tracks_and_writes_the_choice(fake, export, ca
         "Selection: ",
         "\nCreate 'Spotify Daily Mix 1' with these 4 track(s)? [y/N] ",
     ]
-    assert "Manual matches:      1\nNeeds review:        0\n" in out
+    assert row("Manual matches", 1) + row("Not in library", 2) in out
     assert fake.playlist(DEST).track_ids == WITH_REVIEW  # in source order, not appended
 
 
@@ -382,7 +392,7 @@ def test_a_manual_choice_is_reused_by_later_unattended_syncs(fake, export, capsy
     monkeypatch.setattr(cli, "_interactive", lambda: False)
     code, out, _ = run(capsys, "sync", export(), "--yes")
     assert code == 0
-    assert "Cached matches:      4\n" in out and "Needs review:        0\n" in out
+    assert row("Cached library matches", 4) in out and "Needs review" not in out
     assert fake.playlist(DEST).track_ids == WITH_REVIEW
 
 
@@ -390,7 +400,7 @@ def test_skipping_in_review_leaves_the_track_out(fake, export, capsys, keyboard)
     keyboard("s", "y")
     code, out, _ = run(capsys, "sync", export())
     assert code == 0
-    assert "Needs review:        1\n" in out
+    assert row("Needs review", 1) in out
     assert fake.playlist(DEST).track_ids == AUTOMATIC
 
 
@@ -422,8 +432,11 @@ def test_sync_with_nothing_resolvable_is_an_error_and_touches_nothing(fake, expo
     tracks = [TRACKS[2], TRACKS[4]]  # Creep (acoustic only) and a song nobody has
     code, out, err = run(capsys, "sync", export(tracks=tracks), "--yes")
     assert code == 1
-    assert "Not in library:      2\n" in out
-    assert "error: none of the 2 track(s) could be matched; 'Spotify Daily Mix 1' was left alone" in err
+    assert row("Not in library", 2) in out
+    assert (
+        "error: none of the 2 track(s) are in your Music library; "
+        "'Spotify Daily Mix 1' was left alone"
+    ) in err
     assert fake.changes() == []
     assert fake.playlist(DEST).track_ids == ["D1", "B2"]
 
@@ -437,8 +450,8 @@ def test_sync_with_an_empty_export_is_an_error(fake, export, capsys):
 def test_sync_with_only_unusable_entries_is_an_error(fake, export, capsys):
     code, out, err = run(capsys, "sync", export(tracks=[{"title": "No Artist"}]), "--yes")
     assert code == 1
-    assert "Unusable entries:    1\n" in out
-    assert "none of the 0 track(s) could be matched" in err
+    assert row("Unusable entries", 1) in out
+    assert "none of the 0 track(s) are in your Music library" in err
     assert fake.changes() == []
 
 
@@ -473,7 +486,7 @@ def test_destination_follows_the_configured_prefix(fake, export, capsys, tmp_pat
 def test_into_writes_to_a_named_managed_playlist(fake, export, capsys):
     code, out, _ = run(capsys, "sync", export(), "--yes", "--into", "Spotify Daily Mix TEST")
     assert code == 0
-    assert "Destination:      Spotify Daily Mix TEST  (will be created)" in out
+    assert "\nDestination:\nSpotify Daily Mix TEST\n" in out
     assert fake.playlist("Spotify Daily Mix TEST").track_ids == AUTOMATIC
     assert all(p.name != DEST for p in fake.playlists)
 
