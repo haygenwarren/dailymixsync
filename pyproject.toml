@@ -27,4 +27,5 @@ where = ["src"]
 testpaths = ["tests"]
 markers = [
     "music_app: drives the real Music app on this Mac; only run with --music-app",
+    "music_ui: operates the real Music window through Accessibility; only run with --music-ui",
 ]

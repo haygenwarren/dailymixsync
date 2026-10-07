@@ -10,14 +10,16 @@ from pathlib import Path
 
 from . import music_ui
 from .apple_music import CatalogError, CatalogSearch, MockCatalog
+from .catalog import CatalogLookup, CatalogReport, add_and_confirm, look_up, resolve_missing
 from .config import ConfigError, Settings, load_settings
 from .database import MappingStore
 from .importer import InputError, Playlist, load_playlist
 from .matcher import MatchResult, MatchStatus, ScoredCandidate
 from .models import SourceTrack
 from .music_app import MusicApp, MusicAppError, UnmanagedPlaylistError
+from .music_ui import MusicCatalogUI
 from .normalize import source_key
-from .review import review_results
+from .review import choose_catalog_result, review_results
 from .sync import (
     PlaylistWriteError,
     destination_name,
@@ -51,7 +53,12 @@ def _describe_candidate(scored: ScoredCandidate) -> str:
     return f"{c.title} — {c.artist}{album} {_clock(c.duration_ms)}  (id {c.persistent_id})"
 
 
-def _print_unresolved(heading: str, results: list[MatchResult], compact: bool = False) -> None:
+def _print_unresolved(
+    heading: str,
+    results: list[MatchResult],
+    compact: bool = False,
+    reasons: dict[SourceTrack, str] | None = None,
+) -> None:
     if not results:
         return
     print(f"\n{heading}:")
@@ -69,6 +76,8 @@ def _print_unresolved(heading: str, results: list[MatchResult], compact: bool = 
             print(f"  {_describe_source(result.track)}")
             print(f"      best {best.score:5.1f}  {_describe_candidate(best)}")
             print(f"                  {best.explain()}")
+        if reasons and result.track in reasons:
+            print(f"      catalog: {reasons[result.track]}")
 
 
 def _print_report(
@@ -77,19 +86,32 @@ def _print_report(
     details: bool,
     live: bool = False,
     compact: bool = False,
+    catalog: CatalogReport | None = None,
 ) -> None:
-    """Print the summary. `live` means the Music library was searched, not a fixture."""
+    """Print the summary.
+
+    `live` means the Music library was searched, not a fixture. `catalog` is what
+    the Apple Music catalog step did, when there was one.
+    """
     by_status = {status: [r for r in results if r.status is status] for status in MatchStatus}
+    from_catalog = [r for r in results if r.from_catalog]
+    would_add = dict(catalog.would_add) if catalog else {}
+    not_found = [r for r in by_status[MatchStatus.FAILED] if r.track not in would_add]
+    local = lambda status: [r for r in by_status[status] if not r.from_catalog]  # noqa: E731
     counts = [
         ("Tracks found", len(playlist.tracks)),
         ("Cached matches", len(by_status[MatchStatus.CACHED])),
-        ("New matches", len(by_status[MatchStatus.MATCHED])),
+        ("New matches", len(local(MatchStatus.MATCHED))),
     ]
-    if by_status[MatchStatus.MANUAL]:
-        counts.append(("Manual matches", len(by_status[MatchStatus.MANUAL])))
+    if local(MatchStatus.MANUAL):
+        counts.append(("Manual matches", len(local(MatchStatus.MANUAL))))
+    if would_add:
+        counts.append(("Would add", len(would_add)))
+    elif catalog is not None:
+        counts.append(("From catalog", len(from_catalog)))
     counts += [
         ("Needs review", len(by_status[MatchStatus.REVIEW])),
-        ("Not in library" if live else "Failed", len(by_status[MatchStatus.FAILED])),
+        ("Not in library" if live else "Failed", len(not_found)),
     ]
     if playlist.duplicates:
         counts.append(("Duplicates", playlist.duplicates))
@@ -111,7 +133,15 @@ def _print_report(
         if any(result.chosen is not None for result in results):
             print("\nMatched:")
         for result in results:
-            if result.status is MatchStatus.MATCHED and result.best is not None:
+            if result.from_catalog and result.chosen is not None and result.mapping is not None:
+                c, m = result.chosen, result.mapping
+                album = f" [{c.album}]" if c.album else ""
+                print(f"  {_describe_source(result.track)}")
+                print(
+                    f"      catalog {m.score:5.1f}  {c.title} — {c.artist}{album} "
+                    f"{_clock(c.duration_ms)}  (id {c.persistent_id}, {m.method})"
+                )
+            elif result.status is MatchStatus.MATCHED and result.best is not None:
                 print(f"  {_describe_source(result.track)}")
                 print(f"      new  {result.best.score:5.1f}  {_describe_candidate(result.best)}")
             elif result.status is MatchStatus.MANUAL and result.mapping is not None:
@@ -125,16 +155,27 @@ def _print_report(
                     f"      cached      id {m.persistent_id}"
                     f"  ({m.method}, score {m.score:.1f}, first matched {m.matched_at[:10]})"
                 )
+    if catalog and catalog.added:
+        print("\nAdded to your library from the Apple Music catalog:")
+        for track, found in catalog.added:
+            print(f"  {track.title} — {track.artist}  →  {found.title} — {found.artist}")
+    if would_add:
+        print("\nWould add from the Apple Music catalog:")
+        for track, row in would_add.items():
+            print(f"  {track.title} — {track.artist}  →  {row.title} — {row.artist}")
     _print_unresolved("Needs review", by_status[MatchStatus.REVIEW], compact)
-    if live:
-        _print_unresolved("Not in the Music library", by_status[MatchStatus.FAILED], compact)
-        if by_status[MatchStatus.FAILED]:
-            print(
-                "  These need the Apple Music catalog, which can only be reached through the\n"
-                "  Music window. That is not built yet."
-            )
-    else:
-        _print_unresolved("Failed", by_status[MatchStatus.FAILED], compact)
+    if not live:
+        _print_unresolved("Failed", not_found, compact)
+        return
+    reasons = dict(catalog.problems) if catalog else None
+    _print_unresolved("Not in the Music library", not_found, compact, reasons)
+    if catalog and catalog.stopped:
+        print(f"\nThe catalog step ended early: {catalog.stopped}")
+    elif not_found and catalog is None:
+        print(
+            "  The Apple Music catalog was not searched for these. "
+            "`sync --catalog` looks for them there."
+        )
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
@@ -203,6 +244,39 @@ def _cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _catalog_ui() -> MusicCatalogUI:
+    return MusicCatalogUI()
+
+
+def _resolve_from_catalog(
+    results: list[MatchResult],
+    music: MusicApp,
+    store: MappingStore,
+    settings: Settings,
+    args: argparse.Namespace,
+) -> tuple[list[MatchResult], CatalogReport]:
+    """Look in the Apple Music catalog for the tracks the library does not have."""
+    ui = _catalog_ui()
+    ui.require_accessibility()
+    missing = sum(result.status is MatchStatus.FAILED for result in results)
+    print(
+        f"Searching the Apple Music catalog for {missing} track(s). Music will come to the "
+        "front; please leave the Mac alone until it hands back.",
+        flush=True,
+    )
+
+    def choose(lookup: CatalogLookup) -> ScoredCandidate | str:
+        ui.hand_back()  # the question is asked in the terminal, not in Music
+        return choose_catalog_result(lookup)
+
+    ask = not args.dry_run and not args.no_review and _interactive()
+    with ui.session():
+        return resolve_missing(
+            results, music, ui, store, settings,
+            dry_run=args.dry_run, choose=choose if ask else None,
+        )
+
+
 def _print_write_failure(destination: str, error: PlaylistWriteError) -> None:
     out = sys.stderr
     print(f"ERROR: updating {destination!r} failed: {error}", file=out)
@@ -239,7 +313,13 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         if ask_now and any(result.status is MatchStatus.REVIEW for result in results):
             results = review_results(results, store)
             print()
-    _print_report(playlist, results, args.details, live=True, compact=not args.details)
+        catalog_report = None
+        if args.catalog and any(result.status is MatchStatus.FAILED for result in results):
+            results, catalog_report = _resolve_from_catalog(results, music, store, settings, args)
+    _print_report(
+        playlist, results, args.details, live=True, compact=not args.details,
+        catalog=catalog_report,
+    )
     waiting = sum(result.status is MatchStatus.REVIEW for result in results)
     if waiting:
         print(f"\n{waiting} track(s) need review and are left out. To decide them, run:")
@@ -250,6 +330,8 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     state = "will be created" if existing is None else f"{existing.track_count} track(s) now"
     print(f"\nDestination:      {destination}  ({state})")
     print(f"New contents:     {len(track_ids)} of {len(playlist.tracks)} track(s), in playlist order")
+    if catalog_report and catalog_report.would_add:
+        print(f"                  plus {len(catalog_report.would_add)} that would be added from the catalog")
 
     if not track_ids:
         print(
@@ -439,6 +521,128 @@ def _cmd_music_clear_test(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- Music window commands: the Apple Music catalog, through the Music window --------
+
+
+def _print_lookup(lookup: CatalogLookup, settings: Settings) -> None:
+    track = lookup.track
+    print("Apple Music catalog search\n")
+    print(f"Looking for: {_describe_source(track)}")
+    print(f"Query:       {search_term(track)}\n")
+    if not lookup.match.candidates:
+        print("Results: none")
+    else:
+        print("Results, best match first (the results page shows no album or duration):")
+    for scored in lookup.match.candidates:
+        row = lookup.row(scored)
+        print(f"  {scored.score:5.1f}  {row.title} — {row.artist}   (result {row.ordinal} on the page)")
+        print(f"         {scored.explain()}")
+    accept = settings.matching.auto_accept_threshold
+    best = lookup.match.best
+    if best is None:
+        print("\nResult: nothing found.")
+    elif lookup.match.status is MatchStatus.MATCHED:
+        row = lookup.row(best)
+        print(f"\nResult: {row.title} — {row.artist} would be chosen (score {best.score:.1f}; accepted from {accept:g}).")
+    elif lookup.match.status is MatchStatus.REVIEW:
+        print(f"\nResult: needs a choice by hand (best score {best.score:.1f}; accepted from {accept:g}).")
+    else:
+        print(f"\nResult: no acceptable match (best score {best.score:.1f}; accepted from {accept:g}).")
+
+
+def _cmd_music_ui_inspect(args: argparse.Namespace) -> int:
+    ui = _catalog_ui()
+    ui.require_accessibility()
+    with ui.session():
+        report = ui.inspect()
+        dumps = [(part, ui.dump(part)) for part in ("toolbar", "pane")] if args.dump else []
+    print("What the catalog automation relies on in the Music window:\n")
+    for state, item, detail in report:
+        mark = {"ok": "ok     ", "missing": "MISSING", "info": "note   "}.get(state, state)
+        print(f"  {mark}  {item}: {detail}")
+    for part, text in dumps:
+        elements = [e.strip(" ,") for e in text.split(" of window Music of application process Music")]
+        print(f"\nEvery element under the {part} ({len([e for e in elements if e])}):")
+        for element in elements:
+            if element:
+                print(f"  {element}")
+    missing = [item for state, item, _ in report if state == "missing"]
+    if missing:
+        print(f"\n{len(missing)} expected part(s) not found. Catalog search will not work until "
+              "music_ui.py is brought in line with this layout.")
+        return 1
+    print("\nEverything the catalog automation needs is in place.")
+    return 0
+
+
+def _cmd_music_catalog_search(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    ui = _catalog_ui()
+    ui.require_accessibility()
+    track = SourceTrack(args.title, args.artist, args.album or "", args.duration)
+    with ui.session():
+        lookup = look_up(track, ui, settings)
+    _print_lookup(lookup, settings)
+    print("Nothing was changed.")
+    return 0 if lookup.match.status is MatchStatus.MATCHED else 1
+
+
+def _cmd_music_catalog_add_test(args: argparse.Namespace) -> int:
+    settings, music = _music(args)
+    ui = _catalog_ui()
+    ui.require_accessibility()
+    track = SourceTrack(args.title, args.artist, args.album or "", args.duration)
+    with ui.session():
+        lookup = look_up(track, ui, settings)
+    _print_lookup(lookup, settings)
+
+    by_hand = False
+    picked = lookup.match.best
+    if lookup.match.status is MatchStatus.REVIEW and _interactive():
+        answer = choose_catalog_result(lookup)
+        picked, by_hand = (answer, True) if isinstance(answer, ScoredCandidate) else (None, False)
+    elif lookup.match.status is not MatchStatus.MATCHED:
+        picked = None
+    if picked is None:
+        print("Nothing was added.")
+        return 1
+    row = lookup.row(picked)
+
+    if not args.yes:
+        if not _interactive():
+            print(
+                "error: not confirmed. Adding a song to your library needs a yes at the "
+                "prompt, or --yes when there is no one to ask.",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            answer = input(f"\nAdd {row.title!r} by {row.artist!r} to your Music library? [y/N] ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Nothing was added.")
+            return 1
+
+    with ui.session():
+        found, added = add_and_confirm(track, lookup, picked, by_hand, music, ui, settings)
+    print()
+    print("Add to Library was chosen in Music." if added else
+          "Music shows this song as already in your library; nothing was added.")
+    if found is None:
+        print(
+            f"error: no matching track showed up in the library within "
+            f"{settings.catalog_wait_s} seconds.",
+            file=sys.stderr,
+        )
+        return 1
+    album = f" [{found.album}]" if found.album else ""
+    print(f"The library now has: {found.title} — {found.artist}{album} {_clock(found.duration_ms)}")
+    print(f"Persistent ID:       {found.persistent_id}")
+    print("It was not added to any playlist.")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -509,6 +713,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--into", dest="destination", metavar="NAME",
         help="write to this managed playlist instead of the one named after the export",
     )
+    sync.add_argument(
+        "--catalog", action=argparse.BooleanOptionalAction, default=False,
+        help="look in the Apple Music catalog for tracks the library lacks, and add the "
+        "matches to the library (operates the Music window; default: --no-catalog)",
+    )
     sync.add_argument("--db", type=Path, metavar="FILE", help="mapping database")
     sync.add_argument(
         "--details", action="store_true", help="also list every matched track and its choice"
@@ -552,6 +761,30 @@ def _build_parser() -> argparse.ArgumentParser:
         "--delete", action="store_true", help="delete the playlist instead of emptying it"
     )
     music_clear_test.set_defaults(handler=_cmd_music_clear_test)
+
+    ui_inspect = commands.add_parser(
+        "music-ui-inspect", parents=[common],
+        help="check that the Music window has what catalog search relies on",
+    )
+    ui_inspect.add_argument(
+        "--dump", action="store_true", help="also list every element of the toolbar and main pane"
+    )
+    ui_inspect.set_defaults(handler=_cmd_music_ui_inspect)
+
+    catalog_search = commands.add_parser(
+        "music-catalog-search", parents=[common, track],
+        help="search the Apple Music catalog for one song and show the results (changes nothing)",
+    )
+    catalog_search.set_defaults(handler=_cmd_music_catalog_search)
+
+    catalog_add = commands.add_parser(
+        "music-catalog-add-test", parents=[common, track],
+        help="find one song in the Apple Music catalog and add it to your library",
+    )
+    catalog_add.add_argument(
+        "--yes", action="store_true", help="add without asking for confirmation"
+    )
+    catalog_add.set_defaults(handler=_cmd_music_catalog_add_test)
     return parser
 
 

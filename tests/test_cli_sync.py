@@ -105,7 +105,7 @@ def test_match_searches_the_music_library_when_no_mock_is_given(fake, export, ca
         "Not in library:      2\n"
     )
     assert "\nNot in the Music library:\n" in out
-    assert "These need the Apple Music catalog" in out
+    assert "The Apple Music catalog was not searched for these." in out
     assert out.rstrip().endswith("Catalog: Music library   Mappings: data/mappings.sqlite3")
     assert stored(tmp_path) == {
         "spotify:track:s1": "A1", "spotify:track:s4": "B1", "spotify:track:s6": "E1",

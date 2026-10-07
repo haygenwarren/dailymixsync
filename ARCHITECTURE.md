@@ -25,22 +25,31 @@ playlist export (JSON)            importer.py     validate, drop duplicates
         ├── score ≥ 90 ─► remember (auto)            MATCHED
         ├── score ≥ 75 ─► manual review   review.py  MANUAL if picked (remembered), else REVIEW
         └── otherwise ──► not in the library         FAILED
-        │                     └─► Music UI automation (planned)   music_ui.py
+        │
+        ▼  only for FAILED tracks, and only with --catalog
+   Apple Music catalog            catalog.py      search → score → choose → add → wait → check
+        │                         music_ui.py     search and Add to Library   (Music window)
+        │                         music_app.py    find the added song         (AppleScript)
+        │                              └── confirmed ──► remembered like any other match
         ▼
-   every track resolved or set aside; nothing in Music has changed yet
+   every track resolved or set aside; no playlist has changed yet
         │
         ▼
    managed playlist               sync.py         record contents → empty → add in order
                                   music_app.py    → read back and compare → restore on failure
 ```
 
-`sync.py` holds both halves: the matching loop, which works with anything that can
-search for songs, and the playlist write, which needs the real Music app. `cli.py`
-parses arguments, asks the questions and prints the report; `config.py` loads
-thresholds, weights and the managed playlist prefix; `models.py` holds the records.
+`sync.py` holds the matching loop, which works with anything that can search for
+songs, and the playlist write, which needs the real Music app. `catalog.py` is the
+fallback for tracks the library lacks. `cli.py` parses arguments, asks the questions
+and prints the report; `config.py` loads thresholds, weights and the managed playlist
+prefix; `models.py` holds the records.
 
-Still to do: the UI automation for songs that are not in the library, and the Spotify
-extractor.
+The rule for the window: it is used for the two things AppleScript cannot do, finding
+a song in the catalog and adding it, and for nothing else. The moment a song is in
+the library, the work goes back to `MusicApp`.
+
+Still to do: the Spotify extractor.
 
 ## Modules
 
@@ -50,7 +59,8 @@ extractor.
 | `normalize.py` | Text cleanup, title/album/artist parsing, cache key | models |
 | `matcher.py` | `MatchConfig`, scoring, accept / review / fail decision | normalize, rapidfuzz |
 | `music_app.py` | `MusicApp`: everything said to Music, as AppleScript run by `osascript` | models |
-| `music_ui.py` | Operating the Music window through Accessibility. Only the permission check so far | music_app |
+| `music_ui.py` | `MusicCatalogUI`: everything that depends on the layout of the Music window | music_app |
+| `catalog.py` | Resolving a track through the catalog: search, score, add, wait for the library, check | sync, music_ui, music_app, matcher, database |
 | `apple_music.py` | The search seam and `MockCatalog`, its offline implementation | models, normalize |
 | `review.py` | Asking a person to pick among candidates; stores the pick as a manual mapping | matcher, database |
 | `database.py` | `MappingStore`: SQLite mapping cache | models, normalize |
@@ -153,6 +163,116 @@ drops whatever the name shares with the end of the prefix: `Daily Mix 1` →
 name a playlist outside the managed ones; `--into` is checked against the same rule
 before anything else happens.
 
+## Music window layer
+
+`music_ui.py` is the only place that knows how the Music window is built. It talks to
+System Events through the same `osascript` runner as `music_app.py`, with the same
+rule that values travel as arguments and never as script text. Its interface is three
+calls: `search_catalog(term)` returns the song results on screen,
+`add_to_library(result)` chooses Add to Library for one of them, and
+`in_library(result)` reads whether Music shows it as already added.
+
+### Layout observed
+
+Read from the accessibility tree of Music 1.6.3 on macOS 26.3, English. Names in
+quotes are the element's accessibility description or title; `id` is its
+`AXIdentifier`.
+
+```
+window "Music"                       AXWindow / AXStandardWindow
+├─ splitter group
+│  ├─ scroll area   id sidebarScroller
+│  │  └─ outline    id outline
+│  │     └─ row → cell named "Search"            first row; then Home, New, Radio, Library…
+│  ├─ scroll area   (the main pane: the one that is not the sidebar)
+│  │  ├─ list       AXList / AXCollectionList
+│  │  │  ├─ list "Top Results"   AXSectionList   cells: id Music.shelfItem.TopSearchLockup[id=top-search-section-top-<id>,…]
+│  │  │  ├─ list "Artists"
+│  │  │  ├─ list "Albums"
+│  │  │  ├─ list "Songs"         exists only once the page has been scrolled
+│  │  │  │  ├─ group             header: button id Music.shelf.header[parentId=track-section-song,itemCount=50,itemKind=trackLockup]
+│  │  │  │  ├─ group "<title>"   id Music.shelfItem.TrackLockup[id=track-section-song-<catalog id>,parentId=track-section-song]
+│  │  │  │  │  ├─ static texts   two empty, then the title (sometimes followed by U+FFFC where a badge is drawn)
+│  │  │  │  │  ├─ button         title = artist name
+│  │  │  │  │  └─ button "More"  pressing it opens `menu 1` of this group
+│  │  │  │  └─ groups with one unnamed button each (shelf paging)
+│  │  │  └─ list "Playlists", "Radio Episodes", "Music Videos"
+│  │  └─ scroll bar
+│  └─ group         id playerToolbarContainer
+└─ toolbar
+   ├─ group → text field   AXTextField / AXSearchField; placeholder names the scope
+   └─ group → radio group  id UIA.Music.Search.Scope
+              └─ radio buttons (AXSegment) "Apple Music", "Library", "iTunes Store"; value 1 = selected
+```
+
+The More menu of a song result:
+
+| Song is | Items |
+| --- | --- |
+| not in the library | **Add to Library**, Add to Playlist, Play Next, Create Station, Favorite, Suggest Less, Get Info, Show in iTunes Store, Share |
+| in the library | Pin Song, Download, Add to Playlist, Play Next, Create Station, Favorite, Suggest Less, Get Info, Show Album in Library, Show in iTunes Store, Share, **Delete from Library** |
+
+So the menu itself says whether a song is in the library, and "Add to Library" is
+there to be chosen only when it is not.
+
+### What was learned by trying
+
+| Observation | Consequence in the code |
+| --- | --- |
+| System Events reports no windows for Music unless Music is the frontmost app on the visible desktop | Every script starts by activating Music and waiting for its window; a session puts the previous app back in front afterwards |
+| The search field shows a value assigned to it but does not search for it | The query is typed with keystrokes and submitted with Return |
+| Keystrokes go to whatever has the keyboard | Immediately before typing and before Return, the script checks that Music is frontmost and the field is focused, and before Return that the field holds exactly the query; otherwise it stops with nothing sent |
+| Assigning an empty value does clear the field | The field is cleared that way, with no select-all or delete keystrokes |
+| The scope segment responds to AXPress and reports value 1 when selected | The scope is switched to Apple Music and confirmed before anything is typed |
+| After Return the result sections appear within a few seconds; the scroll bar slightly later | Results are waited for with a time limit (15 s), never a fixed sleep |
+| The Songs section is not in the tree until the page has been scrolled; setting the scroll bar's value brings it in. `AXScrollDownByPage` did not | The scroll bar is moved once, then the section is waited for |
+| A song row offers only AXPress, which would play it | Rows are never pressed; the More button is |
+| The row identifier embeds Apple's ID for the song | A result is found again by that identifier, not by position. The ID is used for nothing else and is never stored |
+| Retyping a query can produce results identical to those already showing | Unchanged results are accepted after a four-second grace period rather than treated as "nothing arrived" |
+| Apple returns loose guesses even for nonsense queries | Every row is scored against the track; a guess is never added |
+| A menu can be closed with AXCancel | When nothing is chosen, the menu is dismissed that way, without an Escape keystroke |
+| Variable names such as `rows` and `path` have meanings of their own inside a System Events tell block | Script variables avoid them |
+
+No screen coordinates, mouse movement or image matching are used anywhere.
+
+### Limits the scripts keep to
+
+- The only menu item ever chosen is the one named exactly "Add to Library". Unit tests
+  read the script and fail if any other press appears in it.
+- Every script checks that the parts it needs exist before it types or presses
+  anything. A missing part raises `MusicUILayoutError` naming it, with a pointer to
+  `music-ui-inspect`.
+- Failures are sorted into two kinds. `MusicUILayoutError` means the window is not as
+  expected, and ends the catalog step, since every later track would fail the same
+  way. `MusicUIError` concerns one track (no results in time, the row gone, Add to
+  Library not offered), which is reported and skipped.
+
+### From catalog result to library track
+
+`catalog.py` runs the sequence for one track and never stores anything the window
+told it:
+
+1. `look_up` searches and turns each row into an ordinary candidate with a title and
+   an artist, scored by `match_track`. Album and duration are simply absent, which the
+   matcher already handles by leaving those components out.
+2. A result at or above the accept threshold is chosen. One in the review band is put
+   to the user through `choose_catalog_result`; picking it authorises adding that
+   song, and nothing is remembered yet.
+3. `add_to_library` chooses Add to Library, or reports that Music shows the song as
+   present.
+4. `wait_for_library` searches the library through AppleScript about once a second up
+   to `catalog_wait_s`.
+5. What it waits for is a confident match. For an automatic choice, that is the export
+   track scored against the library with full metadata. For a manual choice, it is the
+   chosen result's own title and artist, because the user may have picked a different
+   version on purpose.
+6. Only then is the mapping stored, with the library track's persistent ID, as `auto`
+   or `manual`. The result is marked `from_catalog` for the report and otherwise
+   behaves like any other match.
+
+A song that was added but never confirmed is left out and not remembered, and the
+report says it stays in the library. With `--dry-run` the sequence stops after step 2.
+
 ## Normalization
 
 Spotify and Apple Music mostly disagree about the *qualifiers* attached to a title:
@@ -237,13 +357,22 @@ All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
   `osascript` that speaks the same reply format, imitates the behaviours listed above
   and can be told to fail on the n-th call of a given script. That is how the
   rollback paths are tested. A fixture also makes any attempt to start a real program
-  from a unit test fail.
-- **Live tests** (`tests/integration/`, marker `music_app`) drive the real app and run
-  only with `pytest --music-app`. They change one playlist, `Spotify Daily Mix TEST`,
-  including a full `sync` into it; they put its contents back afterwards, never delete
-  it, and assert that the library and every other playlist are unchanged.
+  from a unit test fail. The Music window has its own stand-in, `tests/fake_ui.py`,
+  which answers searches from a fixed catalog and can delay, drop or alter what
+  arrives in the library. The window scripts are also tested as text, for what they
+  are allowed to do.
+- **Live tests of the app** (`tests/integration/`, marker `music_app`) drive the real
+  app through AppleScript and run only with `pytest --music-app`. They change one
+  playlist, `Spotify Daily Mix TEST`, including a full `sync` into it; they put its
+  contents back afterwards, never delete it, and assert that the library and every
+  other playlist are unchanged.
+- **Live tests of the window** (marker `music_ui`) operate the real Music window and
+  run only with `pytest --music-ui`. They change nothing: layout check, catalog
+  search, menu reading, and "add" on a song already present. Adding a new song is
+  left to `music-catalog-add-test`, since it cannot be undone automatically.
 
 ## Deliberately absent
 
 No server, no web framework, no ORM, no async, no plugin system, no Apple API client
-and no credential handling.
+and no credential handling. No screen coordinates or image matching in the window
+automation, and no UI automation for anything AppleScript can do.

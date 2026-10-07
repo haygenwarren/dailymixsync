@@ -52,6 +52,11 @@ def test_managed_playlist_prefix_can_be_changed(tmp_path):
     assert settings.managed_playlist_prefix == "Mirror"
 
 
+def test_catalog_wait_can_be_changed(tmp_path):
+    assert load_settings(write(tmp_path, {"catalog_wait_s": 60})).catalog_wait_s == 60
+    assert Settings().catalog_wait_s == 30
+
+
 def test_missing_explicit_config_file(tmp_path):
     with pytest.raises(ConfigError, match="cannot read config"):
         load_settings(tmp_path / "nope.json")
@@ -73,6 +78,8 @@ def test_missing_explicit_config_file(tmp_path):
         ({"managed_playlist_prefix": ""}, "managed_playlist_prefix must be"),
         ({"managed_playlist_prefix": " Spotify Daily Mix"}, "managed_playlist_prefix must be"),
         ({"managed_playlist_prefix": 7}, "managed_playlist_prefix must be"),
+        ({"catalog_wait_s": 0}, "catalog_wait_s must be"),
+        ({"catalog_wait_s": "long"}, "catalog_wait_s must be"),
     ],
 )
 def test_invalid_config_is_explained(tmp_path, payload, message):

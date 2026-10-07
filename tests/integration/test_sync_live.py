@@ -11,7 +11,7 @@ import pytest
 
 from daily_mix_sync import cli
 
-pytestmark = pytest.mark.music_app
+pytestmark = [pytest.mark.music_app, pytest.mark.usefixtures("test_playlist")]
 
 TEST = "Spotify Daily Mix TEST"
 MISSING = {"title": "Zzqqxx Notarealsongtitle", "artist": "Nobody At All"}

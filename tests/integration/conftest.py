@@ -1,8 +1,9 @@
 """Fixtures for the tests that drive the real Music app.
 
-Every test file here gets an empty "Spotify Daily Mix TEST" playlist to work in.
-When the file is done, the playlist's contents are put back exactly as they were
-found, and the library and every other playlist are checked to be unchanged.
+A test file that asks for the `test_playlist` fixture gets an empty
+"Spotify Daily Mix TEST" playlist to work in. When the file is done, the playlist's
+contents are put back exactly as they were found, and the library and every other
+playlist are checked to be unchanged.
 
 The playlist itself is never deleted, not even when these tests created it: with
 Sync Library on, a playlist deleted and then created again under the same name has
@@ -61,7 +62,7 @@ def baseline(music):
     assert snapshot() == before, "something other than the test playlist changed"
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope="module")
 def test_playlist(music, baseline):
     """Hand the tests an empty test playlist, then put back whatever it held."""
     existed = music.find_playlist(TEST) is not None

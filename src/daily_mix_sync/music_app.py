@@ -48,6 +48,8 @@ ACCESSIBILITY_HELP = (
 class MusicAppError(Exception):
     """Music could not be reached, or refused or failed a request."""
 
+    code: int | None = None  # the AppleScript error number, when the failure had one
+
 
 class MusicPermissionError(MusicAppError):
     """macOS blocked the Apple Event: Automation permission is missing."""
@@ -73,7 +75,12 @@ def error_from_osascript(stderr: str) -> MusicAppError:
     match = _OSA_ERROR.search(stderr)
     if match is None:
         return MusicAppError(f"osascript failed: {stderr or 'no error text'}")
-    message, code = match["message"], int(match["code"])
+    error = _classify(match["message"], int(match["code"]))
+    error.code = int(match["code"])
+    return error
+
+
+def _classify(message: str, code: int) -> MusicAppError:
     if code == -1743:
         return MusicPermissionError(AUTOMATION_HELP)
     # System Events reports this under more than one number (-25211, -1719).

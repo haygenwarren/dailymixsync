@@ -46,6 +46,9 @@ class FakeMusic:
         # {script: [n, ...]}: fail the n-th time (1-based) that script is sent
         self.fail_on: dict[str, list[int]] = {}
         self._sent: dict[str, int] = {}
+        # Songs on their way into the library: [library searches still to go, track].
+        # Imitates the delay before a newly added song is visible to AppleScript.
+        self.arriving: list[list] = []
         self._next_id = 1
         self._handlers = {
             music_app._IS_RUNNING: self._is_running,
@@ -134,9 +137,21 @@ class FakeMusic:
     def _playlist_tracks(self, playlist_id: str) -> str:
         return self._track_rows(self._by_id(playlist_id).track_ids)
 
+    def add_to_library(self, track: AppleCandidate, after_searches: int = 0) -> None:
+        """Put a song in the library, at once or after that many library searches."""
+        if after_searches <= 0:
+            self.library[track.persistent_id] = track
+        else:
+            self.arriving.append([after_searches, track])
+
     def _search(self, term: str, limit: str) -> str:
         if not term.strip():
             raise _script_error("Music got an error: Parameter error.", -50)
+        for entry in self.arriving:
+            entry[0] -= 1
+            if entry[0] <= 0:
+                self.library[entry[1].persistent_id] = entry[1]
+        self.arriving = [entry for entry in self.arriving if entry[0] > 0]
         wanted = normalize_text(term).split()
         hits = []
         for t in self.library.values():

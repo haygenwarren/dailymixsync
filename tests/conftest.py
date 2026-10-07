@@ -15,13 +15,25 @@ def pytest_addoption(parser):
     )
 
 
+    parser.addoption(
+        "--music-ui",
+        action="store_true",
+        help="also run the tests that operate the real Music window through Accessibility "
+        "(they search the Apple Music catalog and change nothing)",
+    )
+
+
 def pytest_collection_modifyitems(config, items):
-    if config.getoption("--music-app"):
-        return
-    skip = pytest.mark.skip(reason="drives the real Music app; run pytest with --music-app")
-    for item in items:
-        if "music_app" in item.keywords:
-            item.add_marker(skip)
+    for option, marker, what in (
+        ("--music-app", "music_app", "drives the real Music app"),
+        ("--music-ui", "music_ui", "operates the real Music window"),
+    ):
+        if config.getoption(option):
+            continue
+        skip = pytest.mark.skip(reason=f"{what}; run pytest with {option}")
+        for item in items:
+            if marker in item.keywords:
+                item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +43,7 @@ def no_real_commands(request, monkeypatch):
     Everything said to Music goes through subprocess.run (osascript), so outside
     the opt-in live tests that call simply fails.
     """
-    if "music_app" in request.keywords:
+    if "music_app" in request.keywords or "music_ui" in request.keywords:
         return
 
     def refuse(command, *args, **kwargs):

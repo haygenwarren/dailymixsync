@@ -27,6 +27,8 @@ class Settings:
     search_limit: int = 10  # candidates requested per search
     # Only playlists named this, or this plus a space and more, are ever changed.
     managed_playlist_prefix: str = DEFAULT_MANAGED_PREFIX
+    # How long to wait for a song added from the catalog to show up in the library.
+    catalog_wait_s: int = 30
     matching: MatchConfig = field(default_factory=MatchConfig)
 
 
@@ -66,10 +68,14 @@ def load_settings(path: Path | None = None) -> Settings:
             raise ValueError(
                 "managed_playlist_prefix must be non-empty text without outer spaces"
             )
+        catalog_wait_s = raw.get("catalog_wait_s", Settings.catalog_wait_s)
+        if isinstance(catalog_wait_s, bool) or not isinstance(catalog_wait_s, int) or catalog_wait_s < 1:
+            raise ValueError("catalog_wait_s must be a whole number of seconds >= 1")
         return Settings(
             database_path=Path(raw.get("database_path", Settings.database_path)),
             search_limit=search_limit,
             managed_playlist_prefix=prefix,
+            catalog_wait_s=catalog_wait_s,
             matching=MatchConfig(**matching),
         )
     except (TypeError, ValueError) as exc:

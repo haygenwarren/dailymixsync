@@ -15,7 +15,7 @@ from daily_mix_sync.models import SourceTrack
 from daily_mix_sync.music_app import MusicApp, UnmanagedPlaylistError, run_osascript
 from daily_mix_sync.sync import search_term
 
-pytestmark = pytest.mark.music_app
+pytestmark = [pytest.mark.music_app, pytest.mark.usefixtures("test_playlist")]
 
 TEST = "Spotify Daily Mix TEST"
 
