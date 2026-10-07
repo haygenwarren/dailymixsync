@@ -1,8 +1,8 @@
 """Tests that drive the real Music app on this Mac.
 
 Skipped unless pytest is run with --music-app. They read the library and change
-exactly one playlist, "Spotify Daily Mix TEST": it is created if missing, and at
-the end it is put back the way it was found (or deleted if it did not exist).
+exactly one playlist, "Spotify Daily Mix TEST"; conftest.py in this directory hands
+each test file an empty one and afterwards puts back whatever was there.
 
 They need Automation permission for whatever app runs pytest; see the README.
 """
@@ -18,58 +18,6 @@ from daily_mix_sync.sync import search_term
 pytestmark = pytest.mark.music_app
 
 TEST = "Spotify Daily Mix TEST"
-
-
-@pytest.fixture(scope="module")
-def music():
-    return MusicApp()
-
-
-@pytest.fixture(scope="module")
-def songs(music):
-    """Three different songs that are in the library."""
-    found = {}
-    for word in ("the", "love", "you", "a", "me", "in"):
-        for song in music.search_songs(word, 5):
-            found.setdefault(song.persistent_id, song)
-        if len(found) >= 3:
-            return list(found.values())[:3]
-    pytest.skip("the Music library has fewer than three songs to test with")
-
-
-@pytest.fixture(scope="module")
-def baseline(music):
-    """What must be the same after the tests as before them."""
-
-    def snapshot():
-        return {
-            "library size": music.library_size(),
-            "other playlists": {
-                (p.persistent_id, p.name, p.track_count)
-                for p in music.playlists()
-                if p.name != TEST
-            },
-        }
-
-    before = snapshot()
-    yield before
-    assert snapshot() == before, "something other than the test playlist changed"
-
-
-@pytest.fixture(scope="module", autouse=True)
-def test_playlist(music, baseline):
-    """Hand the tests an empty test playlist, then restore whatever was there."""
-    existed = music.find_playlist(TEST) is not None
-    previous = [t.persistent_id for t in music.playlist_tracks(TEST)] if existed else []
-    music.ensure_playlist(TEST)
-    music.clear_playlist(TEST)
-    yield
-    if existed:
-        music.ensure_playlist(TEST)
-        music.clear_playlist(TEST)
-        music.add_tracks(TEST, previous)
-    else:
-        music.delete_playlist(TEST)
 
 
 def titles(music):
@@ -156,17 +104,17 @@ def test_clear_keeps_the_playlist_and_the_library(music, songs, baseline):
     assert all(music.has_track(s.persistent_id) for s in songs)
 
 
-def test_delete_and_recreate_gives_a_new_playlist(music, songs, baseline):
-    old = music.find_playlist(TEST)
+def test_emptying_and_refilling_keeps_the_same_playlist(music, songs):
+    """What a sync does. Deleting and recreating is deliberately not exercised here:
+    with Sync Library on, iCloud has brought a just-deleted playlist back as a duplicate."""
+    before = music.find_playlist(TEST)
     music.add_tracks(TEST, [songs[0].persistent_id])
-    assert music.delete_playlist(TEST) is True
-    assert music.find_playlist(TEST) is None
-    assert music.delete_playlist(TEST) is False
-    assert music.library_size() == baseline["library size"]
-    assert music.has_track(songs[0].persistent_id)
-    new = music.ensure_playlist(TEST)
-    assert new.persistent_id != old.persistent_id
-    assert new.track_count == 0
+    music.clear_playlist(TEST)
+    music.add_tracks(TEST, [songs[1].persistent_id, songs[2].persistent_id])
+    assert music.playlist_tracks(TEST) == [songs[1], songs[2]]
+    assert music.find_playlist(TEST).persistent_id == before.persistent_id
+    assert sum(p.name == TEST for p in music.playlists()) == 1
+    music.clear_playlist(TEST)
 
 
 @pytest.fixture(scope="module")

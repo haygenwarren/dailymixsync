@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,22 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "music_app" in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def no_real_commands(request, monkeypatch):
+    """Unit tests must never reach the real Music app, whatever the code under test does.
+
+    Everything said to Music goes through subprocess.run (osascript), so outside
+    the opt-in live tests that call simply fails.
+    """
+    if "music_app" in request.keywords:
+        return
+
+    def refuse(command, *args, **kwargs):
+        raise AssertionError(f"a unit test tried to run a real command: {command!r}")
+
+    monkeypatch.setattr(subprocess, "run", refuse)
 
 
 @pytest.fixture

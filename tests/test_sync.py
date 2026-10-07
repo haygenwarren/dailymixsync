@@ -37,6 +37,9 @@ class CountingCatalog:
         self.terms.append(term)
         return self.inner.search_songs(term, limit)
 
+    def get_track(self, persistent_id):
+        return self.inner.get_track(persistent_id)
+
 
 @pytest.fixture
 def playlist(sample_playlist_path):
@@ -116,6 +119,9 @@ def test_search_limit_setting_reaches_the_catalog(playlist, store):
         def search_songs(self, term, limit):
             seen.append(limit)
             return []
+
+        def get_track(self, persistent_id):
+            return None
 
     match_playlist(playlist, Recorder(), store, Settings(search_limit=3))
     assert set(seen) == {3}

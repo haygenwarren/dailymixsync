@@ -13,31 +13,34 @@ playlist export (JSON)            importer.py     validate, drop duplicates
    SourceTrack ──► normalization  normalize.py    base title, flags, qualifiers, artists
         │
         ▼
-   cache lookup                   database.py     source key → stored Music track?
-        │ miss                         └── hit ──► done (CACHED)
+   cache lookup                   database.py     source key → remembered Music track
+        │                         music_app.py    is that track still in the library?
+        │ miss, or track gone          └── yes ──► CACHED
         ▼
    local Music library search     music_app.py    search_songs(term, limit) → candidates
         │                         (AppleScript)
         ▼
    candidate scoring              matcher.py      0–100 per candidate, best first
         │
-        ├── score ≥ 90 ─► store mapping (auto)      MATCHED
-        ├── score ≥ 75 ─► manual review (planned)   REVIEW
-        └── otherwise ──► not in the library        FAILED
+        ├── score ≥ 90 ─► remember (auto)            MATCHED
+        ├── score ≥ 75 ─► manual review   review.py  MANUAL if picked (remembered), else REVIEW
+        └── otherwise ──► not in the library         FAILED
         │                     └─► Music UI automation (planned)   music_ui.py
         ▼
-   managed playlist               music_app.py    empty it, add tracks in source order
+   every track resolved or set aside; nothing in Music has changed yet
+        │
+        ▼
+   managed playlist               sync.py         record contents → empty → add in order
+                                  music_app.py    → read back and compare → restore on failure
 ```
 
-`sync.py` runs the matching loop for a playlist; `cli.py` parses arguments and prints
-the report; `config.py` loads thresholds, weights and the managed playlist prefix;
-`models.py` holds the records.
+`sync.py` holds both halves: the matching loop, which works with anything that can
+search for songs, and the playlist write, which needs the real Music app. `cli.py`
+parses arguments, asks the questions and prints the report; `config.py` loads
+thresholds, weights and the managed playlist prefix; `models.py` holds the records.
 
-What is connected today: everything down to candidate scoring runs against the mock
-catalog through `match`; the Music library search and all playlist operations work
-and are reachable through the `music-*` commands. Still to do: point `match` at the
-Music library, write the playlist from a `sync` command, the UI automation for songs
-that are not in the library, the review prompt and the Spotify extractor.
+Still to do: the UI automation for songs that are not in the library, and the Spotify
+extractor.
 
 ## Modules
 
@@ -48,19 +51,22 @@ that are not in the library, the review prompt and the Spotify extractor.
 | `matcher.py` | `MatchConfig`, scoring, accept / review / fail decision | normalize, rapidfuzz |
 | `music_app.py` | `MusicApp`: everything said to Music, as AppleScript run by `osascript` | models |
 | `music_ui.py` | Operating the Music window through Accessibility. Only the permission check so far | music_app |
-| `apple_music.py` | The `search_songs` seam and `MockCatalog`, its offline implementation | models, normalize |
+| `apple_music.py` | The search seam and `MockCatalog`, its offline implementation | models, normalize |
+| `review.py` | Asking a person to pick among candidates; stores the pick as a manual mapping | matcher, database |
 | `database.py` | `MappingStore`: SQLite mapping cache | models, normalize |
 | `importer.py` | Load and validate a playlist export | models, normalize |
 | `config.py` | `Settings` from defaults plus optional JSON file | matcher, music_app |
-| `sync.py` | The matching loop, and one-track matching for the debug commands | all of the above |
+| `sync.py` | The matching loop, destination naming, and the playlist write with verification and restore | all of the above |
 | `cli.py` | Commands and output | all of the above |
 
 The matcher never touches Music or the database: it takes a track and a list of
 candidates and returns a decision. That is what makes it testable without Music.
 
-The one seam is `search_songs(term, limit) -> list[AppleCandidate]`. `MusicApp`
-implements it over the local library and `MockCatalog` over a JSON fixture; the
-pipeline cannot tell them apart.
+The one seam is two methods: `search_songs(term, limit)` to find candidates, and
+`get_track(persistent_id)` to check that a remembered track still exists. `MusicApp`
+implements them over the local library and `MockCatalog` over a JSON fixture; the
+matching loop cannot tell them apart, so `match` and `review` run the same code
+against either.
 
 ## Music app layer
 
@@ -89,7 +95,7 @@ it:
 
 | Observation | Consequence in the code |
 | --- | --- |
-| `search` needs every word to match (as a word prefix, any field, any order) and ignores case, accents and punctuation | Query is base title + primary artist; the word "and" is dropped |
+| `search` needs every word to match (as a word prefix, in any field including composer, any order) and ignores case, accents and punctuation | Query is base title + primary artist; the word "and" is dropped |
 | An empty search term is error -50 | Blank searches are answered without calling Music |
 | Looking a playlist up by name ignores case | Names are compared again, exactly, in Python and in the script |
 | `user playlists` includes smart playlists, folders and Music's built-in lists | Only class `user playlist`, not smart, special kind `none` counts |
@@ -97,6 +103,8 @@ it:
 | Inside `tell application "Music"`, `names`, `artists` and `albums` are constants | Script variables use other names |
 | The library holds music videos as well as songs | Search keeps `media kind` song only |
 | A track has one persistent ID, in the library and in every playlist | That ID is the cached mapping |
+| Tracks of a playlist are reported in display order unless `fixed indexing` is on | It is switched on for the read and put back, so order checks mean something |
+| A playlist deleted and recreated under the same name can come back from iCloud as a duplicate | Syncing empties and never deletes; the live tests never delete either |
 | There is no command to search the Apple Music catalog or add a catalog song | Songs outside the library need UI automation |
 
 ### Safety rule
@@ -118,9 +126,32 @@ command.
 
 ### Updating a playlist
 
-Emptying a playlist keeps its persistent ID; deleting and recreating it produces a
-different playlist. The update strategy is therefore: find the managed playlist, empty
-it, add the new tracks in source order. Delete-and-recreate is the fallback.
+`write_playlist` in `sync.py` replaces the contents of one managed playlist:
+
+1. Find or create the playlist (refused unless the name is managed).
+2. Record what it holds.
+3. Empty it and add the new tracks in order, in one script call.
+4. Read it back and compare with what was intended: count, tracks and order.
+5. If step 3 raised, step 4 found a difference, a track had left the library in the
+   meantime, or the user interrupted: empty it again, add the recorded contents, and
+   check that too. Then raise `PlaylistWriteError`, which says whether the restore
+   worked and carries the recorded contents in case it did not.
+
+Emptying keeps the playlist's persistent ID, so it remains the same playlist. Music
+has no transactions, so step 5 is a best effort, and the code says so rather than
+claiming atomicity.
+
+The command resolves every track before step 1. A failure while matching or reviewing
+therefore cannot leave a playlist half-written, and a run where nothing resolves stops
+without touching the playlist.
+
+### Where a playlist goes
+
+`destination_name` puts the managed prefix in front of the export's playlist name and
+drops whatever the name shares with the end of the prefix: `Daily Mix 1` →
+`Spotify Daily Mix 1`. Because the result always begins with the prefix, no export can
+name a playlist outside the managed ones; `--into` is checked against the same rule
+before anything else happens.
 
 ## Normalization
 
@@ -186,11 +217,12 @@ All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
   `meta:<artists>|<title>|<album>|<seconds>` built from normalized metadata.
 - Value: the matched track's Music persistent ID, plus its title, artist and album so
   the table can be read by a person.
-- Any stored mapping is a cache hit and skips the search. Once `match` runs against
-  Music, a hit will first be checked with `has_track`, so a song since removed from
-  the library is matched afresh instead of trusted.
-- Only automatic matches (and, later, manual confirmations) are stored. Tracks that
-  need review or failed are evaluated again on the next run.
+- A stored mapping is a cache hit only if `get_track` still finds its track; the
+  live track is what gets used. If the track is gone, the mapping is logged, deleted
+  and the track is matched from scratch. This also means a made-up mock ID could not
+  survive in a real run even if one got into the real database.
+- Automatic matches and manual picks are stored. Tracks that need review, were
+  skipped, or failed are evaluated again on the next run.
 - A manual mapping is never replaced by an automatic one; the rule is enforced in the
   SQL upsert, not just by the caller.
 - Each mapping is committed as soon as it is made, so an interrupted run keeps its
@@ -200,13 +232,16 @@ All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
 
 ## Tests
 
-- **Unit tests** (`tests/`) are deterministic and never touch Music. The Music adapter
-  is run against `tests/fake_music.py`, an in-memory stand-in for `osascript` that
-  speaks the same reply format and imitates the behaviours listed above.
+- **Unit tests** (`tests/`) are deterministic and never touch Music. Everything that
+  talks to Music is run against `tests/fake_music.py`, an in-memory stand-in for
+  `osascript` that speaks the same reply format, imitates the behaviours listed above
+  and can be told to fail on the n-th call of a given script. That is how the
+  rollback paths are tested. A fixture also makes any attempt to start a real program
+  from a unit test fail.
 - **Live tests** (`tests/integration/`, marker `music_app`) drive the real app and run
   only with `pytest --music-app`. They change one playlist, `Spotify Daily Mix TEST`,
-  restore it afterwards, and assert that the library and every other playlist are
-  unchanged.
+  including a full `sync` into it; they put its contents back afterwards, never delete
+  it, and assert that the library and every other playlist are unchanged.
 
 ## Deliberately absent
 

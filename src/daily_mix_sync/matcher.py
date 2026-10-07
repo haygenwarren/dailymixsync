@@ -72,8 +72,9 @@ class MatchConfig:
 
 
 class MatchStatus(enum.Enum):
-    CACHED = "cached"  # reused a stored mapping, no search performed
+    CACHED = "cached"  # reused a stored mapping whose track still exists
     MATCHED = "matched"  # best candidate accepted automatically
+    MANUAL = "manual"  # candidate picked by hand during review, in this run
     REVIEW = "review"  # plausible candidate, needs a human decision
     FAILED = "failed"  # no search results, or nothing scored high enough
 
@@ -106,7 +107,9 @@ class MatchResult:
     track: SourceTrack
     status: MatchStatus
     candidates: tuple[ScoredCandidate, ...] = ()  # best first
-    mapping: Mapping | None = None  # set when status is CACHED
+    mapping: Mapping | None = None  # set when status is CACHED or MANUAL
+    chosen: AppleCandidate | None = None  # the track to use; None while unresolved
+    stale: bool = False  # a stored mapping pointed at a track that no longer exists
 
     @property
     def best(self) -> ScoredCandidate | None:
@@ -212,4 +215,5 @@ def match_track(
         status = MatchStatus.REVIEW
     else:
         status = MatchStatus.MATCHED
-    return MatchResult(track=track, status=status, candidates=scored)
+    chosen = scored[0].candidate if status is MatchStatus.MATCHED else None
+    return MatchResult(track=track, status=status, candidates=scored, chosen=chosen)

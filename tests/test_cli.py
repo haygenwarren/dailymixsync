@@ -76,10 +76,19 @@ def test_verbose_logs_candidate_scores(workdir, capsys, sample_playlist_path, mo
     assert "version mismatch: live" in err
 
 
-def test_match_without_a_catalog_explains_what_is_missing(workdir, capsys, sample_playlist_path):
-    assert main(["match", str(sample_playlist_path)]) == 1
-    assert "not connected yet" in capsys.readouterr().err
+def test_mock_matches_are_never_stored_in_the_real_database(
+    workdir, capsys, sample_playlist_path, mock_catalog_path
+):
+    args = match_args(sample_playlist_path, mock_catalog_path, "--db", "data/mappings.sqlite3")
+    assert main(args) == 1
+    assert "refusing to store mock matches in the real mapping database" in capsys.readouterr().err
     assert not (workdir / "data").exists()
+
+    # The same refusal when the real database lives somewhere else.
+    (workdir / "config.json").write_text('{"database_path": "elsewhere/real.sqlite3"}')
+    args = match_args(sample_playlist_path, mock_catalog_path, "--db", "elsewhere/real.sqlite3")
+    assert main(args) == 1
+    assert not (workdir / "elsewhere").exists()
 
 
 def test_matching_settings_come_from_the_config_file(

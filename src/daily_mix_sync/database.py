@@ -105,5 +105,10 @@ class MappingStore:
         assert mapping is not None
         return mapping
 
+    def delete(self, key: str) -> None:
+        """Forget a mapping, for instance because its track left the library."""
+        self._conn.execute("DELETE FROM mappings WHERE source_key = ?", (key,))
+        self._conn.commit()
+
     def count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM mappings").fetchone()[0]

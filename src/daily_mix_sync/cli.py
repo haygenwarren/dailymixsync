@@ -8,16 +8,24 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from .apple_music import CatalogError, MockCatalog
+from . import music_ui
+from .apple_music import CatalogError, CatalogSearch, MockCatalog
 from .config import ConfigError, Settings, load_settings
 from .database import MappingStore
 from .importer import InputError, Playlist, load_playlist
 from .matcher import MatchResult, MatchStatus, ScoredCandidate
 from .models import SourceTrack
-from . import music_ui
-from .music_app import MusicApp, MusicAppError
+from .music_app import MusicApp, MusicAppError, UnmanagedPlaylistError
 from .normalize import source_key
-from .sync import match_one, match_playlist, search_term
+from .review import review_results
+from .sync import (
+    PlaylistWriteError,
+    destination_name,
+    match_one,
+    match_playlist,
+    search_term,
+    write_playlist,
+)
 
 # Mock runs get their own database so made-up track IDs never reach the real cache.
 MOCK_DATABASE_PATH = Path("data/mock_mappings.sqlite3")
@@ -43,47 +51,73 @@ def _describe_candidate(scored: ScoredCandidate) -> str:
     return f"{c.title} — {c.artist}{album} {_clock(c.duration_ms)}  (id {c.persistent_id})"
 
 
-def _print_unresolved(heading: str, results: list[MatchResult]) -> None:
+def _print_unresolved(heading: str, results: list[MatchResult], compact: bool = False) -> None:
     if not results:
         return
     print(f"\n{heading}:")
     for result in results:
-        print(f"  {_describe_source(result.track)}")
-        if result.best is None:
+        best = result.best
+        if compact:
+            closest = "" if best is None else (
+                f"  (closest: {best.candidate.title}, score {best.score:.1f})"
+            )
+            print(f"  {result.track.title} — {result.track.artist}{closest}")
+        elif best is None:
+            print(f"  {_describe_source(result.track)}")
             print("      no search results")
         else:
-            print(f"      best {result.best.score:5.1f}  {_describe_candidate(result.best)}")
-            print(f"                  {result.best.explain()}")
+            print(f"  {_describe_source(result.track)}")
+            print(f"      best {best.score:5.1f}  {_describe_candidate(best)}")
+            print(f"                  {best.explain()}")
 
 
-def _print_report(playlist: Playlist, results: list[MatchResult], details: bool) -> None:
+def _print_report(
+    playlist: Playlist,
+    results: list[MatchResult],
+    details: bool,
+    live: bool = False,
+    compact: bool = False,
+) -> None:
+    """Print the summary. `live` means the Music library was searched, not a fixture."""
     by_status = {status: [r for r in results if r.status is status] for status in MatchStatus}
     counts = [
         ("Tracks found", len(playlist.tracks)),
         ("Cached matches", len(by_status[MatchStatus.CACHED])),
         ("New matches", len(by_status[MatchStatus.MATCHED])),
+    ]
+    if by_status[MatchStatus.MANUAL]:
+        counts.append(("Manual matches", len(by_status[MatchStatus.MANUAL])))
+    counts += [
         ("Needs review", len(by_status[MatchStatus.REVIEW])),
-        ("Failed", len(by_status[MatchStatus.FAILED])),
+        ("Not in library" if live else "Failed", len(by_status[MatchStatus.FAILED])),
     ]
     if playlist.duplicates:
         counts.append(("Duplicates", playlist.duplicates))
     if playlist.skipped:
         counts.append(("Unusable entries", len(playlist.skipped)))
+    stale = sum(result.stale for result in results)
+    if stale:
+        counts.append(("Stale mappings", stale))
     print(playlist.name)
     print("-" * len(playlist.name))
     for label, count in counts:
         print(f"{label + ':':<18}{count:>4}")
     for reason in playlist.skipped:
         print(f"  unusable: {reason}")
+    if stale:
+        print(f"  {stale} remembered track(s) had left the library and were matched again")
 
     if details:
-        resolved = by_status[MatchStatus.CACHED] + by_status[MatchStatus.MATCHED]
-        if resolved:
+        if any(result.chosen is not None for result in results):
             print("\nMatched:")
         for result in results:
             if result.status is MatchStatus.MATCHED and result.best is not None:
                 print(f"  {_describe_source(result.track)}")
                 print(f"      new  {result.best.score:5.1f}  {_describe_candidate(result.best)}")
+            elif result.status is MatchStatus.MANUAL and result.mapping is not None:
+                picked = next(c for c in result.candidates if c.candidate == result.chosen)
+                print(f"  {_describe_source(result.track)}")
+                print(f"      manual {picked.score:5.1f}  {_describe_candidate(picked)}")
             elif result.status is MatchStatus.CACHED and result.mapping is not None:
                 m = result.mapping
                 print(f"  {_describe_source(result.track)}")
@@ -91,8 +125,16 @@ def _print_report(playlist: Playlist, results: list[MatchResult], details: bool)
                     f"      cached      id {m.persistent_id}"
                     f"  ({m.method}, score {m.score:.1f}, first matched {m.matched_at[:10]})"
                 )
-    _print_unresolved("Needs review", by_status[MatchStatus.REVIEW])
-    _print_unresolved("Failed", by_status[MatchStatus.FAILED])
+    _print_unresolved("Needs review", by_status[MatchStatus.REVIEW], compact)
+    if live:
+        _print_unresolved("Not in the Music library", by_status[MatchStatus.FAILED], compact)
+        if by_status[MatchStatus.FAILED]:
+            print(
+                "  These need the Apple Music catalog, which can only be reached through the\n"
+                "  Music window. That is not built yet."
+            )
+    else:
+        _print_unresolved("Failed", by_status[MatchStatus.FAILED], compact)
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
@@ -108,24 +150,150 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return 0 if playlist.tracks else 1
 
 
+def _interactive() -> bool:
+    """Whether there is a person at the keyboard to answer questions."""
+    return sys.stdin.isatty()
+
+
+def _open_catalog(
+    args: argparse.Namespace, settings: Settings
+) -> tuple[CatalogSearch, Path, str]:
+    """What to search, where to remember matches, and a label for the report.
+
+    The Music library unless a mock catalog is named. The two never share a
+    database: a made-up mock ID must not be remembered as a real Music track.
+    """
+    if args.mock_catalog is None:
+        music = MusicApp(settings.managed_playlist_prefix)
+        return music, args.db or settings.database_path, "Music library"
+    database_path = args.db or MOCK_DATABASE_PATH
+    if database_path.resolve() == settings.database_path.resolve():
+        raise ConfigError(
+            f"refusing to store mock matches in the real mapping database {database_path}; "
+            "leave --db out or point it somewhere else"
+        )
+    return MockCatalog.from_file(args.mock_catalog), database_path, f"mock ({args.mock_catalog})"
+
+
 def _cmd_match(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     playlist = load_playlist(args.playlist)
-    if args.mock_catalog is None:
+    catalog, database_path, source = _open_catalog(args, settings)
+    with MappingStore(database_path) as store:
+        results = match_playlist(playlist, catalog, store, settings)
+    _print_report(playlist, results, args.details, live=args.mock_catalog is None)
+    print(f"\nCatalog: {source}   Mappings: {database_path}")
+    return 0
+
+
+def _cmd_review(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    playlist = load_playlist(args.playlist)
+    catalog, database_path, source = _open_catalog(args, settings)
+    with MappingStore(database_path) as store:
+        results = match_playlist(playlist, catalog, store, settings)
+        pending = sum(result.status is MatchStatus.REVIEW for result in results)
+        if pending:
+            results = review_results(results, store)
+            print()
+        else:
+            print("Nothing needs review.\n")
+    _print_report(playlist, results, args.details, live=args.mock_catalog is None)
+    print(f"\nCatalog: {source}   Mappings: {database_path}")
+    return 0
+
+
+def _print_write_failure(destination: str, error: PlaylistWriteError) -> None:
+    out = sys.stderr
+    print(f"ERROR: updating {destination!r} failed: {error}", file=out)
+    count = len(error.previous)
+    if error.restored:
+        print(f"✓ Its previous contents were restored ({count} track(s)).", file=out)
+        return
+    print(f"✗ Its previous contents could NOT be restored: {error.restore_problem}", file=out)
+    print(
+        f"  Manual intervention is required: {destination!r} may now be empty or incomplete.\n"
+        f"  It held these {count} track(s):",
+        file=out,
+    )
+    for track in error.previous:
+        print(f"    {track.title} — {track.artist}", file=out)
+
+
+def _cmd_sync(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    playlist = load_playlist(args.playlist)
+    music = MusicApp(settings.managed_playlist_prefix)
+    destination = args.destination or destination_name(playlist.name, music.managed_prefix)
+    if not music.is_managed(destination):
+        raise UnmanagedPlaylistError(
+            f"refusing to write to playlist {destination!r}: only {music.managed_prefix!r} and "
+            f"playlists starting with {music.managed_prefix + ' '!r} may be changed"
+        )
+
+    # Everything that can go wrong with matching happens before the playlist is touched.
+    database_path = args.db or settings.database_path
+    with MappingStore(database_path) as store:
+        results = match_playlist(playlist, music, store, settings)
+        ask_now = not args.dry_run and not args.no_review and _interactive()
+        if ask_now and any(result.status is MatchStatus.REVIEW for result in results):
+            results = review_results(results, store)
+            print()
+    _print_report(playlist, results, args.details, live=True, compact=not args.details)
+    waiting = sum(result.status is MatchStatus.REVIEW for result in results)
+    if waiting:
+        print(f"\n{waiting} track(s) need review and are left out. To decide them, run:")
+        print(f"  python -m daily_mix_sync review {args.playlist}")
+
+    track_ids = [result.chosen.persistent_id for result in results if result.chosen is not None]
+    existing = music.find_playlist(destination)
+    state = "will be created" if existing is None else f"{existing.track_count} track(s) now"
+    print(f"\nDestination:      {destination}  ({state})")
+    print(f"New contents:     {len(track_ids)} of {len(playlist.tracks)} track(s), in playlist order")
+
+    if not track_ids:
         print(
-            "error: matching a whole playlist against the Music library is not connected yet.\n"
-            "       One track:       music-find TITLE ARTIST\n"
-            "       Offline fixture: --mock-catalog samples/mock_apple_catalog.json",
+            f"error: none of the {len(playlist.tracks)} track(s) could be matched; "
+            f"{destination!r} was left alone",
             file=sys.stderr,
         )
         return 1
-    catalog = MockCatalog.from_file(args.mock_catalog)
-    database_path = args.db or MOCK_DATABASE_PATH
+    if args.dry_run:
+        print("\nNo changes made (--dry-run).")
+        return 0
+    if not args.yes:
+        if not _interactive():
+            print(
+                "error: not confirmed. Replacing a playlist's contents needs a yes at the "
+                "prompt, or --yes when there is no one to ask.",
+                file=sys.stderr,
+            )
+            return 1
+        if existing is None:
+            question = f"Create {destination!r} with these {len(track_ids)} track(s)?"
+        else:
+            question = f"Replace the contents of {destination!r}?"
+        try:
+            answer = input(f"\n{question} [y/N] ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Nothing was changed.")
+            return 1
 
-    with MappingStore(database_path) as store:
-        results = match_playlist(playlist, catalog, store, settings)
-    _print_report(playlist, results, args.details)
-    print(f"\nCatalog: mock ({args.mock_catalog})   Mappings: {database_path}")
+    try:
+        report = write_playlist(music, destination, track_ids)
+    except PlaylistWriteError as error:
+        _print_write_failure(destination, error)
+        return 1
+    print()
+    if report.created:
+        print(f"Created playlist:   {destination}")
+    else:
+        print(f"Cleared old tracks: {report.previous_count}")
+    print(f"Added new tracks:   {report.written}")
+    print(f"Verified:           {report.written} / {report.written}, in order")
+    print("\n✓ Playlist updated and verified.")
     return 0
 
 
@@ -294,23 +462,58 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("playlist", type=Path, help="playlist export (JSON)")
     validate.set_defaults(handler=_cmd_validate)
 
-    match = commands.add_parser(
-        "match", parents=[common],
-        help="match a playlist export against the catalog and remember the matches",
-    )
-    match.add_argument("playlist", type=Path, help="playlist export (JSON)")
-    match.add_argument(
+    catalog = argparse.ArgumentParser(add_help=False)
+    catalog.add_argument("playlist", type=Path, help="playlist export (JSON)")
+    catalog.add_argument(
         "--mock-catalog", type=Path, metavar="FILE",
-        help="search this JSON fixture instead of Music (required for now)",
+        help="search this JSON fixture instead of the Music library",
     )
-    match.add_argument(
+    catalog.add_argument(
         "--db", type=Path, metavar="FILE",
-        help=f"mapping database (default with --mock-catalog: {MOCK_DATABASE_PATH})",
+        help="mapping database (default: the configured one, or "
+        f"{MOCK_DATABASE_PATH} with --mock-catalog)",
     )
-    match.add_argument(
+    catalog.add_argument(
         "--details", action="store_true", help="also list every matched track and its choice"
     )
+
+    match = commands.add_parser(
+        "match", parents=[common, catalog],
+        help="match a playlist export against the Music library and remember the matches",
+    )
     match.set_defaults(handler=_cmd_match)
+
+    review = commands.add_parser(
+        "review", parents=[common, catalog],
+        help="match a playlist export, then choose by hand for the tracks that need review",
+    )
+    review.set_defaults(handler=_cmd_review)
+
+    sync = commands.add_parser(
+        "sync", parents=[common],
+        help="match a playlist export and write the result to its managed playlist in Music",
+    )
+    sync.add_argument("playlist", type=Path, help="playlist export (JSON)")
+    sync.add_argument(
+        "--dry-run", action="store_true",
+        help="match and report, but do not create or change any playlist",
+    )
+    sync.add_argument(
+        "--yes", action="store_true", help="replace the playlist's contents without asking"
+    )
+    sync.add_argument(
+        "--no-review", action="store_true",
+        help="do not ask about tracks that need review; leave them out",
+    )
+    sync.add_argument(
+        "--into", dest="destination", metavar="NAME",
+        help="write to this managed playlist instead of the one named after the export",
+    )
+    sync.add_argument("--db", type=Path, metavar="FILE", help="mapping database")
+    sync.add_argument(
+        "--details", action="store_true", help="also list every matched track and its choice"
+    )
+    sync.set_defaults(handler=_cmd_sync)
 
     music_test = commands.add_parser(
         "music-test", parents=[common], help="check that the Music app can be reached"
@@ -362,4 +565,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
     except sqlite3.Error as exc:
         print(f"error: mapping database problem: {exc}", file=sys.stderr)
+    except KeyboardInterrupt:
+        # An interrupt while a playlist is being written is handled there, by
+        # restoring it. One that arrives here came before or after that.
+        print("\ninterrupted", file=sys.stderr)
+        return 130
     return 1

@@ -1,7 +1,8 @@
 """Where candidate songs come from.
 
-The pipeline only needs search_songs(). Two things provide it: music_app.MusicApp,
-which searches the local Music library, and MockCatalog here, which searches a JSON
+The pipeline needs two things: search_songs() to find candidates, and get_track() to
+check that a remembered track still exists. Two classes provide them:
+music_app.MusicApp, over the local Music library, and MockCatalog here, over a JSON
 fixture so matching can be tested without Music.
 """
 
@@ -23,6 +24,10 @@ class CatalogError(Exception):
 class CatalogSearch(Protocol):
     def search_songs(self, term: str, limit: int) -> list[AppleCandidate]:
         """Return up to `limit` songs for a free-text term, most relevant first."""
+        ...
+
+    def get_track(self, persistent_id: str) -> AppleCandidate | None:
+        """The track with this ID as it is now, or None if it no longer exists."""
         ...
 
 
@@ -77,3 +82,6 @@ class MockCatalog:
         ]
         hits.sort(key=lambda hit: (-hit[0], hit[1]))
         return [self._songs[index] for _, index in hits[:limit]]
+
+    def get_track(self, persistent_id: str) -> AppleCandidate | None:
+        return next((s for s in self._songs if s.persistent_id == persistent_id), None)

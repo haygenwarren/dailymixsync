@@ -43,6 +43,9 @@ class FakeMusic:
         self.version = version
         self.calls: list[tuple[str, list[str]]] = []
         self.ignore_adds = False  # simulate Music accepting a request and doing nothing
+        # {script: [n, ...]}: fail the n-th time (1-based) that script is sent
+        self.fail_on: dict[str, list[int]] = {}
+        self._sent: dict[str, int] = {}
         self._next_id = 1
         self._handlers = {
             music_app._IS_RUNNING: self._is_running,
@@ -53,6 +56,7 @@ class FakeMusic:
             music_app._PLAYLIST_TRACKS: self._playlist_tracks,
             music_app._SEARCH: self._search,
             music_app._HAS_TRACK: lambda track_id: str(track_id in self.library).lower(),
+            music_app._GET_TRACK: self._get_track,
             music_app._CREATE_PLAYLIST: self._create,
             music_app._ADD_TRACKS: self._add,
             music_app._REMOVE_TRACK: self._remove,
@@ -62,7 +66,18 @@ class FakeMusic:
 
     def __call__(self, script: str, args) -> str:
         self.calls.append((script, list(args)))
+        self._sent[script] = self._sent.get(script, 0) + 1
+        if self._sent[script] in self.fail_on.get(script, ()):
+            raise _script_error("Music got an error: Connection is invalid.", -609)
         return self._handlers[script](*args)
+
+    def changes(self) -> list[tuple[str, list[str]]]:
+        """The calls that create or change something, in order."""
+        changing = (
+            music_app._CREATE_PLAYLIST, music_app._ADD_TRACKS, music_app._REMOVE_TRACK,
+            music_app._CLEAR_PLAYLIST, music_app._DELETE_PLAYLIST,
+        )
+        return [(script, args) for script, args in self.calls if script in changing]
 
     def scripts_sent(self) -> list[str]:
         return [script for script, _ in self.calls]
@@ -86,6 +101,9 @@ class FakeMusic:
             ms = "" if t.duration_ms is None else str(t.duration_ms)
             rows.append(US.join([t.persistent_id, t.title, t.artist, t.album, ms]))
         return RS.join(rows)
+
+    def _get_track(self, track_id: str) -> str:
+        return self._track_rows([track_id]) if track_id in self.library else ""
 
     def _playlists(self, name: str | None = None) -> str:
         found = [p for p in self.playlists if name is None or p.name.lower() == name.lower()]
