@@ -954,9 +954,72 @@ def _build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="daily_mix_sync",
-        description="Recreate Spotify Daily Mix playlists in Apple Music from track metadata.",
+        description=(
+            "Recreate Spotify Daily Mix playlists in Apple Music, using only songs that are "
+            "already in your Music library."
+        ),
+        epilog=(
+            "Everyday use: export your Daily Mixes with the Chrome extension, then run "
+            "'sync-downloads --dry-run' and 'sync-downloads'. Every command takes --help."
+        ),
     )
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(
+        dest="command", required=True, title="commands", metavar="COMMAND"
+    )
+
+    downloads = commands.add_parser(
+        "sync-downloads", parents=[common],
+        help="everyday use: sync the recent exports found in your Downloads folder",
+        description=(
+            "Find the recent Spotify exports in your Downloads folder and sync them. The newest "
+            "export of each playlist is used; older copies are ignored, and exports past the age "
+            "limit are left out and listed. Only songs already in your Music library are "
+            "written, and nothing is added to it. The exported files are read where they are: "
+            "they are never moved or deleted."
+        ),
+    )
+    downloads.add_argument(
+        "--downloads-dir", type=Path, metavar="PATH",
+        help="folder to look in (default: downloads_dir from the settings, ~/Downloads)",
+    )
+    downloads.add_argument(
+        "--max-age", type=_positive_hours, metavar="HOURS",
+        help="use exports up to this many hours old (default: export_max_age_hours from "
+        "the settings, 24); older ones are left out and listed",
+    )
+    downloads.add_argument(
+        "--list", action="store_true",
+        help="show which exports would be used and stop; nothing is matched and Music is "
+        "not touched",
+    )
+    _add_sync_options(downloads)
+    # Accepted only so that it can be turned down with an explanation.
+    downloads.add_argument("--into", dest="destination", metavar="NAME", help=argparse.SUPPRESS)
+    downloads.set_defaults(handler=_cmd_sync_downloads)
+
+    sync = commands.add_parser(
+        "sync", parents=[common],
+        help="sync the exports you name, each to its own playlist",
+        description=(
+            "Sync the exports you name. Each goes to the playlist named after it, holding the "
+            "songs that are already in your Music library; the rest are left out and listed, "
+            "and nothing is added to the library. With several exports, all are matched before "
+            "any playlist is changed, and you are asked once. For everyday use, see "
+            "sync-downloads."
+        ),
+    )
+    sync.add_argument(
+        "playlist", type=Path, nargs="+", metavar="EXPORT",
+        help="playlist export (JSON). Several can be given: each goes to its own playlist, "
+        "and all are matched before any playlist is changed",
+    )
+    _add_sync_options(sync)
+    sync.add_argument(
+        "--into", dest="destination", metavar="NAME",
+        help="write to this managed playlist instead of the one named after the export "
+        "(with one export only)",
+    )
+    sync.set_defaults(handler=_cmd_sync)
 
     validate = commands.add_parser(
         "validate", parents=[common], help="check a playlist export and list its tracks"
@@ -990,48 +1053,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="match a playlist export, then choose by hand for the tracks that need review",
     )
     review.set_defaults(handler=_cmd_review)
-
-    sync = commands.add_parser(
-        "sync", parents=[common],
-        help="write the songs of an export that are already in your Music library to its "
-        "managed playlist; songs you do not have are left out",
-    )
-    sync.add_argument(
-        "playlist", type=Path, nargs="+", metavar="EXPORT",
-        help="playlist export (JSON). Several can be given: each goes to its own playlist, "
-        "and all are matched before any playlist is changed",
-    )
-    _add_sync_options(sync)
-    sync.add_argument(
-        "--into", dest="destination", metavar="NAME",
-        help="write to this managed playlist instead of the one named after the export "
-        "(with one export only)",
-    )
-    sync.set_defaults(handler=_cmd_sync)
-
-    downloads = commands.add_parser(
-        "sync-downloads", parents=[common],
-        help="sync the newest export of each Daily Mix found in your Downloads folder; "
-        "the files are read where they are and are not moved or deleted",
-    )
-    downloads.add_argument(
-        "--downloads-dir", type=Path, metavar="PATH",
-        help="folder to look in (default: downloads_dir from the settings, ~/Downloads)",
-    )
-    downloads.add_argument(
-        "--max-age", type=_positive_hours, metavar="HOURS",
-        help="use exports up to this many hours old (default: export_max_age_hours from "
-        "the settings, 24); older ones are left out and listed",
-    )
-    downloads.add_argument(
-        "--list", action="store_true",
-        help="show which exports would be used and stop; nothing is matched and Music is "
-        "not touched",
-    )
-    _add_sync_options(downloads)
-    # Accepted only so that it can be turned down with an explanation.
-    downloads.add_argument("--into", dest="destination", metavar="NAME", help=argparse.SUPPRESS)
-    downloads.set_defaults(handler=_cmd_sync_downloads)
 
     music_test = commands.add_parser(
         "music-test", parents=[common], help="check that the Music app can be reached"

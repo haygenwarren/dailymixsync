@@ -1,4 +1,4 @@
-"""Load a playlist export: the JSON file the Spotify browser helper will produce.
+"""Load a playlist export: the JSON file the browser extension saves.
 
 Expected shape (unknown keys are ignored):
 

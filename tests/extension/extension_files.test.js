@@ -143,6 +143,18 @@ test("nothing in the extension reaches outside it: no remote code, no eval", () 
   assert.doesNotMatch(code("popup.js"), /\b(fetch|XMLHttpRequest|WebSocket|sendBeacon)\b/);
 });
 
+test("the popup points to sync-downloads and still cannot run anything", () => {
+  const popup = read("popup.js");
+  assert.match(popup, /const NEXT_COMMAND = "python -m daily_mix_sync sync-downloads";/);
+  assert.doesNotMatch(popup, /data\//, "no advice to move the file into data/");
+  // The command is shown as text. Nothing opens a program, a link or a native app.
+  assert.doesNotMatch(
+    code("popup.js"),
+    /\b(sendNativeMessage|connectNative|openOptionsPage)\b|\bopen\s*\(|\blocation\s*=|\blocation\.(assign|replace|href)\b/
+  );
+  assert.doesNotMatch(read("manifest.json"), /nativeMessaging|downloads|tabs"|storage/);
+});
+
 test("the version in the manifest is a plain release number", () => {
   assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
 });

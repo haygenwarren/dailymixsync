@@ -8,6 +8,8 @@
   const { format } = globalThis.DailyMixSync;
   const PORT_NAME = "daily-mix-sync"; // must match content.js
   const PAGE_SCRIPTS = ["export_format.js", "spotify_dom.js", "content.js"]; // in this order
+  // What to do with the saved file. Shown as text to copy; nothing here can run it.
+  const NEXT_COMMAND = "python -m daily_mix_sync sync-downloads";
 
   const $ = (id) => document.getElementById(id);
   let tab = null;
@@ -31,6 +33,7 @@
     setText("headline", view.headline);
     setText("detail", view.detail);
     setText("lookup", view.lookup);
+    setText("command", view.command);
     show("progress", next === "scanning");
     $("warnings").replaceChildren(
       ...(view.warnings || []).map((warning) => {
@@ -93,7 +96,8 @@
       headline: `Saved ${done.filename}`,
       detail: `${count} from “${done.playlistName}”. First: ${done.first}. Last: ${done.last}.`,
       warnings: done.warnings,
-      lookup: "Move the file into the project's data/ folder, then run validate on it.",
+      lookup: "Export your other Daily Mixes, then run:",
+      command: NEXT_COMMAND,
     });
   }
 

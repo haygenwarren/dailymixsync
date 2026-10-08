@@ -132,6 +132,8 @@ const POPUP_VIEW = `({
   headline: document.getElementById('headline').textContent,
   detail: document.getElementById('detail').textContent,
   lookup: document.getElementById('lookup').textContent,
+  command: document.getElementById('command').hidden ? '' : document.getElementById('command').textContent,
+  fits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
   warnings: [...document.querySelectorAll('#warnings li')].map((item) => item.textContent),
 })`;
 
@@ -219,6 +221,11 @@ async function checkPlaylist(browser, extensionId, url, downloads) {
   const view = await clickExportAndWait(popup, 120000);
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
   check("the export finishes", view.state === "done", `${view.headline}${view.state === "failed" ? `: ${view.detail} ${view.lookup}` : `, ${seconds} s`}`);
+  check(
+    "the popup says what to run next, and it fits",
+    view.command === "python -m daily_mix_sync sync-downloads" && view.fits,
+    `${view.lookup} ${view.command}`
+  );
   await sleep(1200);
 
   const files = readdirSync(downloads).filter((name) => name.endsWith(".json"));

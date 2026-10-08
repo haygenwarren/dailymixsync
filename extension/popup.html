@@ -63,6 +63,20 @@
         font: 11px/1.4 ui-monospace, Menlo, monospace;
         overflow-wrap: anywhere;
       }
+      #lookup:has(+ #command:not([hidden])) {
+        margin-bottom: 4px;
+      }
+      /* The command to run next. One click selects all of it, ready to copy. */
+      #command {
+        display: block;
+        margin: 0 0 8px;
+        padding: 6px 8px;
+        border-radius: 6px;
+        background: var(--panel);
+        color: var(--text);
+        user-select: all;
+        cursor: text;
+      }
       progress {
         width: 100%;
         height: 6px;
@@ -125,6 +139,7 @@
     <p id="detail" hidden></p>
     <ul id="warnings" hidden></ul>
     <p id="lookup" hidden></p>
+    <code id="command" hidden></code>
     <div id="actions">
       <button id="export" class="primary" hidden>Export this playlist</button>
       <button id="download" hidden>Download again</button>

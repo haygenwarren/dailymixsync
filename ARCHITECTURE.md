@@ -61,8 +61,6 @@ weights and the managed playlist prefix; `models.py` holds the records.
 None of the modules on this path imports `music_ui.py`, `catalog.py` or
 `experimental.py`, and a test fails if one ever does.
 
-Still to do: the Spotify extractor.
-
 ## Modules
 
 | Module | Responsibility | Depends on |
@@ -171,10 +169,11 @@ its playlist is not emptied and, if it does not exist yet, not created.
 
 ## Exports from the Downloads folder
 
-`sync-downloads` removes one manual step, moving files from Downloads into `data/`,
-and adds no moving part to do it. There is no link between the browser and Python: the
-extension saves a file as before, and later, when the command is run, `downloads.py`
-looks at what is in the folder.
+`sync-downloads` is the everyday way in. It spares moving each export out of
+Downloads by hand, and adds no moving part to do it. There is no link between the
+browser and Python: the extension saves a file, and later, when the command is run,
+`downloads.py` looks at what is in the folder. The popup names the command to run
+next, as text; it cannot run it.
 
 ```
 every *.json directly in the folder
@@ -229,7 +228,7 @@ this is how it is put together and why.
 | `export_format.js` | Pure functions: duration, track ID and URL, file name, merging rows, the JSON | nothing |
 | `spotify_dom.js` | Every selector, and reading a name, a count or a row from the page | reads the DOM |
 | `content.js` | `scanPlaylist`: the scroll-and-collect loop; and the link to the popup | reads the DOM, sets `scrollTop` |
-| `popup.html`, `popup.js` | The states the user sees; injects the three files above; saves the file | `chrome.*`, its own page |
+| `popup.html`, `popup.js` | The states the user sees; injects the three files above; saves the file; says which command to run next | `chrome.*`, its own page |
 | `manifest.json` | `activeTab` and `scripting`, an action with a popup, nothing else | |
 
 The three page files are ordinary scripts that hang their functions on one shared
@@ -670,6 +669,10 @@ All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
   viewport, redraws after a delay, can load rows late or never, and keeps its own
   clock, so slow pages and stalls are tested in milliseconds. That clock has a
   ceiling: a scan that would never end fails its test instead of hanging it.
+- **The popup** (`tests/extension/popup.test.js`) is run for real, `popup.html` and
+  `popup.js` in jsdom, against a stand-in for the few `chrome.*` calls it makes: each
+  state, the file saved byte for byte as the page sent it, and the next step shown as
+  plain text with no new button.
 - **Extension, live** (`npm run test:live`). The real extension, loaded into a hidden
   Chrome with a throwaway profile through the DevTools protocol, exporting public
   playlists from the real site and compared with the page's own metadata. It is to the

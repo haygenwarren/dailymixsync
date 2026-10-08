@@ -1,5 +1,5 @@
 {
-  "note": "Hand-written sample in the format the Spotify browser helper will export. Song metadata is written the way Spotify typically formats it; the Spotify IDs are placeholders, not real track IDs.",
+  "note": "Hand-written sample in the format the browser extension exports. Song metadata is written the way Spotify typically formats it; the Spotify IDs are placeholders, not real track IDs.",
   "playlist_name": "Daily Mix 1 (sample)",
   "tracks": [
     {

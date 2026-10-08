@@ -39,7 +39,7 @@ MusicKit, no API key or token, and no hosted service.
 - **macOS** with the **Music** app. Developed and tested on macOS 26.3 with Music 1.6.3.
 - **Python 3.12** or newer.
 - Music **signed in** to an Apple Music subscription, with Sync Library on, so that
-  catalog songs can live in your library and in playlists.
+  the Apple Music songs in your library can be put in playlists.
 - **Automation permission** for the app you run the tool from; see
   [Permissions](#permissions). Nothing else: a sync needs no Accessibility permission.
 - **Google Chrome**, or another Chromium browser, for the Spotify export extension.
@@ -48,17 +48,75 @@ MusicKit, no API key or token, and no hosted service.
 
 ## Setup
 
-Requires Python 3.12 or newer. From the repository root:
+From a fresh clone to a first sync, on a Mac:
 
-```sh
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-```
+1. **Get the code and install it.** Python 3.12 or newer is needed.
+
+   ```sh
+   git clone https://github.com/haygenwarren/dailymixsync.git
+   cd dailymixsync
+   python3.12 -m venv .venv
+   source .venv/bin/activate
+   pip install -e ".[dev]"
+   ```
+
+2. **Load the Chrome extension.** Open `chrome://extensions`, switch on **Developer
+   mode**, click **Load unpacked** and choose this repository's `extension/` folder.
+   [More about the extension](extension/README.md).
+
+3. **Let the tool talk to Music.**
+
+   ```sh
+   python -m daily_mix_sync music-test
+   ```
+
+   The first time, macOS asks whether your terminal may control Music; choose
+   **Allow**. The command then prints Music's version and the size of your library.
+   If it does not, see [Permissions](#permissions).
+
+4. **Export your Daily Mixes and sync them**, as described under
+   [From Spotify to Apple Music](#from-spotify-to-apple-music):
+
+   ```sh
+   python -m daily_mix_sync sync-downloads --dry-run
+   python -m daily_mix_sync sync-downloads
+   ```
 
 Dependencies: [`rapidfuzz`](https://github.com/rapidfuzz/RapidFuzz) for fuzzy string
 matching, and `pytest` for the tests. SQLite, JSON and logging come from the standard
 library, and Music is driven with the `osascript` command that ships with macOS.
+
+### Every new terminal window
+
+The tool is installed inside the virtual environment `.venv`, not system-wide. That
+environment has to be switched on in each terminal window before any command here
+will work:
+
+```sh
+cd dailymixsync              # wherever you cloned it
+source .venv/bin/activate
+```
+
+The prompt then starts with `(.venv)`.
+
+### If a command is not found
+
+| What you see | What it means |
+| --- | --- |
+| `zsh: command not found: python` | macOS has no command called `python` of its own. The one this tool uses lives in `.venv` and is found only while the environment is active. |
+| `No module named daily_mix_sync` | A different Python is running, one that does not have the tool installed. |
+
+Both generally mean the virtual environment is not active. Activate it, then check
+which Python you are getting:
+
+```sh
+source .venv/bin/activate
+which python
+```
+
+The path printed should point into `.venv`, ending in `.venv/bin/python`. If
+`source .venv/bin/activate` itself fails with "no such file or directory", you are
+not in the repository folder, or step 1 above has not been run yet.
 
 ## From Spotify to Apple Music
 
@@ -89,8 +147,9 @@ That is all. There is no file to move and nothing to edit by hand.
 - **Old exports are left out.** By default only exports from the last 24 hours are
   used, so a file forgotten in Downloads is not synced weeks later. Anything left out
   for that reason is named.
-- **The files stay in Downloads.** They are read where they are, and never moved or
-  deleted. Clearing them out now and then is up to you.
+- **The files stay where Chrome downloaded them.** They are read there, and never
+  moved or deleted. Old exports do no harm, since only recent ones are used; delete
+  them by hand whenever you like.
 - **The sync stays library-only.** Each playlist, such as `Spotify Daily Mix 1`, gets
   the songs of its mix that are already in your Apple Music library; the rest are
   listed and left out. Nothing is added to your library.
@@ -104,10 +163,14 @@ The extension only reads the Spotify page and saves a file, as any web page can.
 does not start a sync, run Python, or talk to Music. Nothing runs in the background;
 the two halves meet in the JSON file and nowhere else.
 
-### Naming the files yourself
+### Working with one export by hand
 
-`sync-downloads` is a convenience. The explicit form is still there, and is the one to
-use when you want to keep exports, look inside them, or sort out a problem:
+Everyday use never needs this. Naming a file yourself is for the other occasions:
+
+- **debugging**, when a sync does something you did not expect;
+- **inspecting one export**, to see exactly what the extension saved;
+- **keeping a particular export**, out of Downloads and past the 24-hour limit;
+- **testing a particular file**, such as one you edited or wrote yourself.
 
 ```sh
 mv ~/Downloads/daily_mix_1.json data/                             # data/ is git-ignored
@@ -115,10 +178,11 @@ python -m daily_mix_sync validate data/daily_mix_1.json           # reads the fi
 python -m daily_mix_sync sync data/daily_mix_1.json --dry-run     # nothing in Music is changed
 python -m daily_mix_sync sync data/daily_mix_1.json
 
-python -m daily_mix_sync sync data/daily_mix_*.json               # or all of them at once
+python -m daily_mix_sync sync data/daily_mix_*.json               # or several at once
 ```
 
-See [Syncing a playlist](#syncing-a-playlist) and
+A file named this way is used whatever its age. See
+[Syncing a playlist](#syncing-a-playlist) and
 [Several mixes at once](#several-mixes-at-once).
 
 ## Try it offline
@@ -666,11 +730,11 @@ upgraded in place the first time it is opened.
 python -m pytest
 ```
 
-909 tests: normalization, scoring, the SQLite store, input validation, config, the
+937 tests: normalization, scoring, the SQLite store, input validation, config, the
 mock catalog, cache validation, manual review, playlist writing with verification and
-rollback, the CLI, syncing several exports in one run, finding exports in a Downloads
-folder, the Music adapter, the two-step library search, and reading the extension's
-export. Everything that would talk to Music runs against an in-memory
+rollback, the CLI and its help text, syncing several exports in one run, finding
+exports in a Downloads folder, the Music adapter, the two-step library search, reading
+the extension's export, and that the commands shown in these documents exist. Everything that would talk to Music runs against an in-memory
 stand-in for `osascript` (`tests/fake_music.py`), which can be told to fail at a
 chosen point and which, like Music, answers a search in library order. One file,
 `tests/test_search_recall.py`, covers how candidates are found and, above all, that
@@ -711,7 +775,7 @@ change nothing at all, not even the test playlist. To run just those:
 python -m pytest tests/integration/test_search_live.py --music-app
 ```
 
-The experimental catalog code has its own unit tests, included in the 909, and its
+The experimental catalog code has its own unit tests, included in the 937, and its
 own live switch; see [the experimental section](#experimental-apple-music-catalog-support).
 
 **The browser extension** has its own tests, in JavaScript, run with Node:
@@ -721,9 +785,10 @@ npm install     # once; installs jsdom, used only by these tests
 npm test
 ```
 
-141 tests, no browser needed: the pure functions, row reading against a fixture page
+163 tests, no browser needed: the pure functions, row reading against a fixture page
 written the way Spotify writes it, the scroll loop against a simulated page that holds
-only the rows near the viewport, and the extension's permissions and read-only rules.
+only the rows near the viewport, the popup against a stand-in for Chrome's extension
+API, and the extension's permissions and read-only rules.
 The two suites share one file, `tests/extension/fixtures/expected_export.json`: the
 JavaScript tests require the extension to produce it byte for byte, and
 `tests/test_extension_export.py` loads it through the real importer.
@@ -1102,17 +1167,16 @@ can affect `sync`, which does not use the window.
 
 ## Next steps
 
-1. **Look at the near misses in review.** Real exports show songs that are plainly
-   right yet land in review rather than being accepted: a song whose copy in the
-   library sits on a compilation album (`Immigrant Song`, 89.8 where 90 is accepted),
-   and an artist credited differently (Jimi Hendrix on Spotify, The Jimi Hendrix
-   Experience in the library, 89.0). These are scoring questions, not search ones, and
+Nothing is waiting to be built. The whole path works: export in the browser, then
+`sync-downloads`. What remains is use.
+
+1. **Run the routine for a week or two** and note what gets in the way, if anything.
+2. **Look at the near misses in review**, should they keep coming up. Real exports show
+   songs that are plainly right yet land in review rather than being accepted: a song
+   whose copy in the library sits on a compilation album (`Immigrant Song`, 89.8 where
+   90 is accepted), and an artist credited differently (Jimi Hendrix on Spotify, The
+   Jimi Hendrix Experience in the library, 89.0). These are scoring questions, and
    should be decided on real cases, not by moving a threshold.
-2. **Run the whole routine for a week.** Export every Daily Mix, run `sync-downloads`,
-   and note what gets in the way. That is the best guide to what, if anything, should
-   be made easier next.
-3. **Small things, only if they prove annoying.** The extension's popup still suggests
-   moving the file into `data/`, which is no longer needed; its wording could point to
-   `sync-downloads` instead. Old exports pile up in Downloads; an option to archive
-   the ones that were used is possible, but nothing here moves or deletes your files
-   today, and that is a good default to keep.
+3. **Leave Downloads alone.** Old exports pile up there and are harmless, because only
+   recent ones are used. Delete them by hand now and then. The tool deliberately does
+   not archive, move or delete them.

@@ -29,30 +29,40 @@ Only Google Chrome has been tried.
 3. Keep the popup open. The playlist scrolls by itself for a second or two, then
    goes back to where it was.
 4. The popup says **Saved daily_mix_1.json**, with the number of tracks and the first
-   and last song so you can compare them with the page. The file is in Chrome's
-   download folder.
+   and last song so you can compare them with the page, and shows the command to run
+   next. The file is in Chrome's download folder; leave it there.
+5. Repeat for your other Daily Mixes.
 
-Then, from the repository root, sync whatever you exported. The files are found in
-your Downloads folder and read where they are; nothing has to be moved:
-
-```sh
-python -m daily_mix_sync sync-downloads --dry-run
-python -m daily_mix_sync sync-downloads
-```
-
-The popup's own hint still says to move the file into `data/`. That also works, and is
-the way to keep an export or look inside it:
+Then, in a terminal at the repository root with the virtual environment active
+(`source .venv/bin/activate`), sync what you exported:
 
 ```sh
-mv ~/Downloads/daily_mix_1.json data/
-python -m daily_mix_sync validate data/daily_mix_1.json
-python -m daily_mix_sync sync data/daily_mix_1.json --dry-run
+python -m daily_mix_sync sync-downloads --list       # which exports would be used
+python -m daily_mix_sync sync-downloads --dry-run    # what each playlist would get
+python -m daily_mix_sync sync-downloads              # do it
 ```
 
-`data/` is git-ignored, so your exports stay out of the repository.
+The exports are found in your Downloads folder and read where they are. Nothing has
+to be moved, and nothing there is changed or deleted. The newest export of each mix
+is used, and exports older than a day are left out. The main README has
+[the details](../README.md#syncing-straight-from-downloads).
 
 It works on any playlist page, not only Daily Mixes, and it makes no assumption about
 how many songs there are or how many Daily Mixes you have.
+
+### Looking at one export by hand
+
+For debugging, for inspecting what was exported, for keeping a particular export, or
+for testing one file, you can also name a file yourself. Copy or move it into `data/`,
+which is git-ignored, so that it stays out of the repository and out of Downloads:
+
+```sh
+mv ~/Downloads/daily_mix_1.json data/
+python -m daily_mix_sync validate data/daily_mix_1.json          # list its tracks; touches nothing else
+python -m daily_mix_sync sync data/daily_mix_1.json --dry-run    # what its playlist would get
+```
+
+This is not needed for everyday use.
 
 ### What the popup can say
 
@@ -62,7 +72,7 @@ how many songs there are or how many Daily Mixes you have.
 | This Spotify page is not a playlist. | You are on Spotify, but not on a playlist page. |
 | Ready to export the playlist in this tab. | Click **Export this playlist**. |
 | Reading tracks… 37 of 50 | It is scrolling and collecting. Closing the popup stops it and restores the scroll position. |
-| Saved daily_mix_1.json | Done. Anything unusual is listed underneath; **Download again** saves the file a second time. |
+| Saved daily_mix_1.json | Done. Anything unusual is listed underneath, followed by the command to run next, `python -m daily_mix_sync sync-downloads`, as text you can select and copy. The popup cannot run it for you. **Download again** saves the file a second time. |
 | Export failed | It says what went wrong and, where it applies, which selector found nothing. **Copy debug info** puts the details on the clipboard. |
 
 ## The file
@@ -200,7 +210,7 @@ npm install     # once; installs jsdom, used only by the tests
 npm test
 ```
 
-141 tests, no browser needed:
+163 tests, no browser needed:
 
 - `export_format.test.js`: duration parsing, track ID and canonical URL, file names,
   merging repeated rows, the JSON written.
@@ -213,6 +223,9 @@ npm test
   only the rows near the viewport and redraws after a scroll. Lists from 1 to 300
   songs, slow redraws, rows that load late, starting part-way down, a wrong row
   count, a list that changes mid-read, cancelling.
+- `popup.test.js`: the popup itself, run against a stand-in for Chrome's extension
+  API. Each state it can show, that an export is saved exactly as it arrives from the
+  page, and what it tells you to run next.
 - `extension_files.test.js`: the permissions and the read-only rules above.
 
 The export of the fixture page has to equal `fixtures/expected_export.json` byte for
@@ -250,8 +263,9 @@ been reported.
 3. Scroll to the middle of a mix and export from there. The file should still start
    at the first song, and the page should end up where you left it.
 4. Open a long playlist (a few hundred songs) and export it.
-5. Run `python -m daily_mix_sync validate` on each file. Every track should be
-   usable, with none skipped.
+5. Run `python -m daily_mix_sync sync-downloads --dry-run`. Every mix you exported
+   should be listed with the right number of tracks. To look inside one file, see
+   [Looking at one export by hand](#looking-at-one-export-by-hand).
 
 If any step fails, **Copy debug info** has what is needed to fix it.
 
