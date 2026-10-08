@@ -35,6 +35,16 @@ def test_search_respects_the_limit():
     assert ids(MockCatalog(SONGS).search_songs("dreams fleetwood mac", limit=2)) == ["1", "3"]
 
 
+def test_a_titles_only_search_looks_at_titles_alone():
+    catalog = MockCatalog(SONGS)
+    by_anything = ids(catalog.search_songs("fleetwood mac"))
+    assert by_anything, "the artist's songs are found by an ordinary search"
+    assert catalog.search_songs("fleetwood mac", titles_only=True) == []
+    assert set(ids(catalog.search_songs("dreams", titles_only=True))) == {
+        song.persistent_id for song in SONGS if "dreams" in song.title.casefold()
+    }
+
+
 @pytest.mark.parametrize("term", ["bohemian rhapsody queen", "", "   ", "!!!"])
 def test_search_with_no_hits_returns_an_empty_list(term):
     assert MockCatalog(SONGS).search_songs(term) == []

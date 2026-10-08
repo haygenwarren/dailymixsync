@@ -273,8 +273,14 @@ def test_second_sync_is_served_from_the_cache(fake, export, capsys):
     assert row("Cached library matches", 3) + row("New library matches", 0) in out
     assert row("Previous tracks", 3) + row("New tracks", 3) in out
     assert fake.playlist(DEST).track_ids == AUTOMATIC
-    searched = [args[0] for script, args in fake.calls if script is music_app._SEARCH]
-    assert sorted(searched) == ["creep radiohead", "let it go idina menzel", "not there nobody"]
+    # Only the three unresolved tracks are searched for, each by title and artist and
+    # then, as that settles nothing, by title alone.
+    searched = [(args[0], args[2]) for script, args in fake.calls if script is music_app._SEARCH]
+    assert searched == [
+        ("let it go idina menzel", "all"), ("let it go", "names"),
+        ("creep radiohead", "all"), ("creep", "names"),
+        ("not there nobody", "all"), ("not there", "names"),
+    ]
 
 
 def test_sync_drops_a_stale_mapping_and_writes_what_is_still_there(fake, export, capsys):

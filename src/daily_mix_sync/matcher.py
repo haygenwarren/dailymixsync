@@ -110,6 +110,9 @@ class MatchResult:
     mapping: Mapping | None = None  # set when status is CACHED or MANUAL
     chosen: AppleCandidate | None = None  # the track to use; None while unresolved
     stale: bool = False  # a stored mapping pointed at a track that no longer exists
+    # How the candidates were found. Set by the search step, not by the matcher.
+    title_search: str = ""  # the title-only query, when that broader search was run
+    title_search_ids: frozenset[str] = frozenset()  # candidates only that search found
 
     @property
     def best(self) -> ScoredCandidate | None:

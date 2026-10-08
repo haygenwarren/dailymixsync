@@ -27,10 +27,13 @@ playlist export (JSON)            importer.py     validate, drop duplicates
         │                         music_app.py    is that track still in the library?
         │ miss, or track gone          └── yes ──► include (CACHED)
         ▼
-   local Music library search     music_app.py    search_songs(term, limit) → candidates
-        │                         (AppleScript)
+   local Music library search     sync.py         1. title + primary artist, first 60 songs
+        │                         music_app.py    2. only if that gave no match: title alone,
+        │                         (AppleScript)      in song titles, first 25
+        │                                         merged, each song once, step 1 first
         ▼
-   candidate scoring              matcher.py      0–100 per candidate, best first
+   candidate scoring              matcher.py      0–100 per candidate, best first; the same
+        │                                         for every candidate, however it was found
         │
         ├── matched  (≥ 90) ──► include, remember           MATCHED
         ├── review   (≥ 75) ──► manual choice   review.py   MANUAL if picked, else left out
@@ -85,12 +88,38 @@ Experimental, off the main path (see
 The matcher never touches Music or the database: it takes a track and a list of
 candidates and returns a decision. That is what makes it testable without Music.
 
-The one seam is two methods: `search_songs(term, limit)` to find candidates, and
-`get_track(persistent_id)` to check that a remembered track still exists. `MusicApp`
-implements them over the local library and `MockCatalog` over a JSON fixture; the
-matching loop cannot tell them apart, so `match` and `review` run the same code
-against either. That seam is also where a future source of songs would plug in,
-without the pipeline changing.
+The one seam is two methods: `search_songs(term, limit, titles_only=False)` to find
+candidates, and `get_track(persistent_id)` to check that a remembered track still
+exists. `MusicApp` implements them over the local library and `MockCatalog` over a
+JSON fixture; the matching loop cannot tell them apart, so `match` and `review` run
+the same code against either. That seam is also where a future source of songs would
+plug in, without the pipeline changing.
+
+### Search finds candidates; the matcher accepts them
+
+`sync.match_one` is the only place that decides what to search for. It searches by
+title and primary artist; if no candidate from that is an automatic match, it searches
+again by title alone, in song titles only, and adds whatever is new. The two lists are
+merged by persistent ID with the first search's results in front, which matters
+because the matcher's sort is stable: on equal scores the more specific search wins.
+
+The division of labour is strict. Search is allowed to be generous, because it decides
+only what gets looked at; `matcher.match_track` then scores every candidate the same
+way against the same thresholds, with no knowledge of which search produced it. Making
+the search wider therefore cannot make a match looser, and the tests for the second
+search are mostly tests that wrong versions it turns up are still rejected.
+
+Why two searches and those depths: Music returns results in library order rather than
+by relevance, and requires every query word to be present. The first makes depth
+matter (a title track sits behind its album); the second makes artist words a risk
+(one word the library spells differently hides the song). The depths, 60 and 25, were
+measured on a real library and are settings; the README has the table. Each search
+result is read with a single request for all its properties, which is about six times
+faster than asking for each one, and is what makes a depth of 60 affordable. A result
+Music cannot describe is skipped inside the script rather than failing the search.
+
+A match result records the title query, if one was made, and which candidates only it
+found, so the command line can say so.
 
 ## Spotify export extension
 
@@ -507,11 +536,19 @@ All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
   but register its commands; `sync` has no option that adds songs; the supported
   commands run with tripwires in place of the window automation; a missing song is
   left out and the run still succeeds.
+- **`tests/test_search_recall.py`** covers the two-step search with the real
+  `MusicApp` code over the stand-in: a title track behind its album, an artist the
+  library credits differently, merging without duplicates, the order on equal scores,
+  the bounds on both searches. Most of its cases are about what a wider search must
+  not do: versions and same-titled songs it turns up are still rejected by the
+  matcher. It came out of an audit of a real Daily Mix and a real library; the songs
+  in it are made up, apart from a few public ones named as cases to keep right.
 - **Live tests** (`tests/integration/`, marker `music_app`) drive the real app through
   AppleScript and run only with `pytest --music-app`. They change one playlist,
   `Spotify Daily Mix TEST`, including a full library-only `sync` into it; they put its
   contents back afterwards, never delete it, and assert that the library and every
-  other playlist are unchanged.
+  other playlist are unchanged. `test_search_live.py` is the exception: it only
+  searches, and can be run on its own when nothing may be touched.
 - **Experimental.** The catalog code has unit tests against a stand-in for the Music
   window (`tests/fake_ui.py`), tests that read the window scripts as text for what
   they are allowed to do, and six read-only live tests behind their own switch,

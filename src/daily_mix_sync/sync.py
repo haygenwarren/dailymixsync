@@ -32,13 +32,50 @@ def search_term(track: SourceTrack) -> str:
     return " ".join([n.title, *n.artists[:1]])
 
 
+def title_term(track: SourceTrack) -> str:
+    """The broader query for a track: its base title and nothing else."""
+    return normalize_track(track.title, track.artist).title
+
+
 def match_one(track: SourceTrack, catalog: CatalogSearch, settings: Settings) -> MatchResult:
-    """Search for one track and score what comes back. Nothing is stored."""
+    """Search for one track and score what comes back. Nothing is stored.
+
+    The search is done in up to two steps, the second only when the first has not
+    produced a match:
+
+    1. base title and primary artist, anywhere in a song's details;
+    2. base title alone, in song titles only.
+
+    The second step exists to find candidates the first cannot reach. A search
+    needs every word to be present, so one artist word that the library spells
+    differently hides the song; and results come in library order, so a song whose
+    title is also its album's name can sit behind the rest of that album. It widens
+    what is looked at, never what is accepted: every candidate, whichever step
+    found it, is scored by the same matcher against the same thresholds.
+    """
     term = search_term(track)
-    result = match_track(
-        track, catalog.search_songs(term, settings.search_limit), settings.matching
-    )
-    log.debug("search %r returned %d candidate(s)", term, len(result.candidates))
+    found = catalog.search_songs(term, settings.search_limit)
+    result = match_track(track, found, settings.matching)
+    log.debug("search %r returned %d candidate(s)", term, len(found))
+
+    title = title_term(track)
+    if result.status is not MatchStatus.MATCHED and title and settings.title_search_limit:
+        seen = {c.persistent_id for c in found}
+        extra = []
+        for candidate in catalog.search_songs(title, settings.title_search_limit, titles_only=True):
+            # A song both searches found is scored once, in its first position.
+            if candidate.persistent_id not in seen:
+                seen.add(candidate.persistent_id)
+                extra.append(candidate)
+        log.debug("title search %r added %d candidate(s)", title, len(extra))
+        # First-step results stay in front: on equal scores the matcher keeps the
+        # order it is given, so the more specific search wins a tie.
+        result = replace(
+            match_track(track, [*found, *extra], settings.matching),
+            title_search=title,
+            title_search_ids=frozenset(c.persistent_id for c in extra),
+        )
+
     for scored in result.candidates:
         c = scored.candidate
         log.debug(

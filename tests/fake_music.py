@@ -7,6 +7,8 @@ behaviours observed in the real app that the adapter has to cope with:
 
 - playlist names are matched without regard to case
 - a search needs every word to match, as a word prefix, in title, artist or album
+  (in the title alone when only song names are searched), and answers in library
+  order rather than best first
 - the scripts themselves refuse to change a playlist that is not managed
 """
 
@@ -144,9 +146,11 @@ class FakeMusic:
         else:
             self.arriving.append([after_searches, track])
 
-    def _search(self, term: str, limit: str) -> str:
+    def _search(self, term: str, limit: str, area: str = "all") -> str:
         if not term.strip():
             raise _script_error("Music got an error: Parameter error.", -50)
+        if area not in ("all", "names"):
+            raise _script_error(f"unexpected search area {area!r}", -50)
         for entry in self.arriving:
             entry[0] -= 1
             if entry[0] <= 0:
@@ -155,7 +159,8 @@ class FakeMusic:
         wanted = normalize_text(term).split()
         hits = []
         for t in self.library.values():
-            words = normalize_text(f"{t.title} {t.artist} {t.album}").split()
+            searched = t.title if area == "names" else f"{t.title} {t.artist} {t.album}"
+            words = normalize_text(searched).split()
             if all(any(word.startswith(w) for word in words) for w in wanted):
                 hits.append(t.persistent_id)
         return self._track_rows(hits[: int(limit)])

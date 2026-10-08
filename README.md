@@ -30,7 +30,7 @@ MusicKit, no API key or token, and no hosted service.
 | --- | --- |
 | Matching against your Music library, with cache and manual review | Working, tested against the real app |
 | Library-only playlist sync: write, verify, roll back on failure | Working, tested against the real app |
-| Spotify export, a Chrome extension in [`extension/`](extension/README.md) | Working on public playlists, tested in a real Chrome against the real site. Not yet run on a Daily Mix in a signed-in browser; see [what was verified](#what-was-verified-against-spotify) |
+| Spotify export, a Chrome extension in [`extension/`](extension/README.md) | Working. Tested in a real Chrome against the real site on public playlists, and used on one real Daily Mix; see [what was verified](#what-was-verified-against-spotify) |
 | Adding songs you do not have, from the Apple Music catalog | Not part of sync. Kept as [experimental commands](#experimental-apple-music-catalog-support) only |
 
 ## Requirements
@@ -332,7 +332,7 @@ python -m daily_mix_sync music-clear-test [--delete]
 | --- | --- | --- |
 | `music-test` | Checks Music can be reached (starting it if needed) and prints its version, library size and managed playlists. | No |
 | `music-playlists` | Lists your playlists, marking smart ones, folders and managed ones. | No |
-| `music-find` | Searches your library for one song and shows every candidate with its score. Exit code 0 only for a confident match. | No |
+| `music-find` | Searches your library for one song the way `sync` does and shows the ten best candidates with their scores, saying which search found each. Exit code 0 only for a confident match. | No |
 | `music-add-test` | Finds the song the same way and, only on a confident match, adds it to `Spotify Daily Mix TEST`, creating that playlist if needed. Then re-reads the playlist to confirm. | Only the TEST playlist |
 | `music-clear-test` | Empties `Spotify Daily Mix TEST`, or deletes it with `--delete` (see the note on deleting under [What was verified](#what-was-verified)). | Only the TEST playlist |
 
@@ -389,7 +389,8 @@ cp config.example.json config.json    # config.json is git-ignored
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `database_path` | `data/mappings.sqlite3` | Mapping database for runs against your Music library. |
-| `search_limit` | 10 | Candidates requested per search. |
+| `search_limit` | 60 | How many results are taken from the first library search, by title and artist. |
+| `title_search_limit` | 25 | How many are taken from the second search, by title alone, made only when the first gives no match. `0` turns it off. See [How library search behaves](#how-library-search-behaves). |
 | `managed_playlist_prefix` | `Spotify Daily Mix` | The only playlists the tool may change; see [Playlist safety](#playlist-safety). |
 | `catalog_wait_s` | 30 | Experimental catalog commands only: how long to wait for an added song to show up in the library. Not used by `sync`. |
 | `matching.auto_accept_threshold` | 90 | Accept automatically at or above this score. |
@@ -446,11 +447,17 @@ upgraded in place the first time it is opened.
 python -m pytest
 ```
 
-635 tests: normalization, scoring, the SQLite store, input validation, config, the
+691 tests: normalization, scoring, the SQLite store, input validation, config, the
 mock catalog, cache validation, manual review, playlist writing with verification and
-rollback, the CLI, the Music adapter, and reading the extension's export. Everything that would talk to Music runs
-against an in-memory stand-in for `osascript` (`tests/fake_music.py`), which can be
-told to fail at a chosen point. One file, `tests/test_library_only.py`, pins down the
+rollback, the CLI, the Music adapter, the two-step library search, and reading the
+extension's export. Everything that would talk to Music runs against an in-memory
+stand-in for `osascript` (`tests/fake_music.py`), which can be told to fail at a
+chosen point and which, like Music, answers a search in library order. One file,
+`tests/test_search_recall.py`, covers how candidates are found and, above all, that
+looking at more of them accepts nothing new: a duet is not matched to the solo
+recording, nor a live, remixed, acoustic, demo or instrumental version to the
+original, nor a same-titled song to another artist's. Another,
+`tests/test_library_only.py`, pins down the
 supported workflow itself: that nothing on the sync path imports the experimental
 code, that `sync` has no option to add songs, that the supported commands never reach
 the Music window or ask about Accessibility, and that a missing song is left out
@@ -464,15 +471,22 @@ AppleScript and are skipped unless you ask for them:
 python -m pytest tests/integration --music-app
 ```
 
-20 tests, under a minute. They read your library and change exactly one playlist,
-`Spotify Daily Mix TEST`, including a complete `sync` into it from a generated
-export. Afterwards its contents are put back exactly as they were found, and the
-tests check that your library size and every other playlist are unchanged. They use a
-temporary mapping database, so your real cache is not touched. They never delete the
-test playlist; if they had to create it, it is left in place, empty. They need only
-the Automation permission below.
+26 tests, about a minute. Twenty of them read your library and change exactly one
+playlist, `Spotify Daily Mix TEST`, including a complete `sync` into it from a
+generated export. Afterwards its contents are put back exactly as they were found, and
+the tests check that your library size and every other playlist are unchanged. They
+use a temporary mapping database, so your real cache is not touched. They never delete
+the test playlist; if they had to create it, it is left in place, empty. They need
+only the Automation permission below.
 
-The experimental catalog code has its own unit tests, included in the 635, and its
+The other six, in `tests/integration/test_search_live.py`, only search the library and
+change nothing at all, not even the test playlist. To run just those:
+
+```sh
+python -m pytest tests/integration/test_search_live.py --music-app
+```
+
+The experimental catalog code has its own unit tests, included in the 691, and its
 own live switch; see [the experimental section](#experimental-apple-music-catalog-support).
 
 **The browser extension** has its own tests, in JavaScript, run with Node:
@@ -545,11 +559,13 @@ All four files passed `validate` exactly as downloaded, and two went through
 `sync --dry-run` against a real library (the 200-song list: 62 in the library, 5 for
 review, 133 not in the library).
 
-**Not verified: a Daily Mix.** Daily Mixes need a signed-in account, which that hidden
-browser does not have. A Daily Mix page is built from the same parts as the public
-playlists above, but that has not been confirmed. The
-[extension README](extension/README.md#trying-it-on-your-own-daily-mixes) has a short
-list of checks to run on your own.
+**A real Daily Mix.** Daily Mixes need a signed-in account, which that hidden browser
+does not have, so this part was done by hand in an ordinary signed-in Chrome on
+2026-10-07: one Daily Mix, 50 tracks exported, every one with album, duration and
+track ID. The file passed `validate` unchanged with all 50 usable and went through
+`sync --dry-run`. The other checks in the
+[extension README](extension/README.md#trying-it-on-your-own-daily-mixes) (a second
+mix, exporting from mid-scroll, a long playlist) have not been reported yet.
 
 ## Music app integration
 
@@ -620,12 +636,69 @@ Music's `search` command, as observed:
 - One word that is not there means no result. The tool therefore searches for the
   base title plus the primary artist only, and drops the word "and", since the library
   entry may say "&".
+- **Results come in the library's own order, not best first.** A search for an
+  album's title track brings back every song on the album, and the song itself can be
+  anywhere among them.
+- The search can be limited to song titles, which leaves album and artist names out.
+- A search can return an entry that is not a readable track. The tool skips it.
 - An empty search is an error in Music; the tool does not send one.
 - The library can hold music videos; only songs are returned.
 
-Search only narrows the field. The existing matcher still scores every candidate, so
-a live version, a remix or a same-titled song by someone else is not accepted just
-because the search returned it.
+#### Two searches, one matcher
+
+For each track that is not already in the cache, the tool looks in up to two ways:
+
+1. **Title and primary artist**, anywhere in a song's details. The first 60 songs are
+   taken (`search_limit`).
+2. **Title alone, in song titles only**, and only if the first search gave no
+   automatic match. The first 25 are taken (`title_search_limit`). This reaches a song
+   whose artist is credited differently in the library, since no artist word is asked
+   for, and a title track buried behind its own album, since album names no longer
+   count.
+
+A song found both ways is scored once. On equal scores, what the first search found
+comes first.
+
+**A wider search is not a looser match.** Both searches only decide which songs are
+looked at. Every one of them is then scored by the same matcher against the same
+thresholds, so a live version, a remix, a duet, or a same-titled song by someone else
+is not accepted just because a search returned it. Nothing about scoring changed when
+the second search was added.
+
+A track that is not in the library costs two quick searches. Nothing walks through the
+whole library.
+
+#### What the depths are based on
+
+The numbers come from an audit of a real library on 2026-10-07. Each of its 4,087
+songs was searched for with the query the tool would build from that song's own title
+and artist:
+
+| Search | Songs found | Missed |
+| --- | --- | --- |
+| Title and artist, first 10 (how it used to work) | 4,041 | 46 |
+| Title and artist, first 60 | 4,085 | 2 |
+| Title and artist, first 10, then title alone, first 25 | 4,081 | 6 |
+| **Title and artist, first 60, then title alone, first 25** | **4,087** | **0** |
+
+Of the 46, 44 were found by the search but sat deeper than tenth, mostly title tracks:
+a song that shares its name with its album comes back together with every other song
+on that album. The other two have a title that punctuation breaks into very short
+words. The six that the title search alone cannot rescue have titles of one short
+word or a single character, which match half a library; they need the depth of the
+first search instead.
+
+Those 46 songs were then put through the real pipeline, each looked for by its own
+title, artist, album and duration. With the old settings 2 were matched. With the new
+ones all 46 are: 41 to the very entry, and 5 to another copy of the same recording
+that the library also holds, such as the standard edition of an album where the song
+looked for was on the deluxe one. The slowest of those searches took 1.2 seconds.
+
+The same audit checked a real Daily Mix of 50 tracks, of which 34 had been reported as
+not in the library. All 34 were confirmed: 33 are not in the library under any
+spelling of title or artist, and one is there only as a different version (a solo
+recording where the mix has the duet), which is rightly left out. So that mix came out
+the same after the change, 16 matched and 34 left out, as it should.
 
 ### Playlist safety
 
@@ -691,13 +764,16 @@ you granted it earlier and do not use those commands, you can switch it off agai
   When it does, the export fails with a message and `extension/spotify_dom.js` needs
   updating. Its other limits are in the
   [extension README](extension/README.md#known-limits): local files and podcast
-  episodes are left out, durations are whole seconds, and it has not yet been run on a
-  Daily Mix in a signed-in browser.
+  episodes are left out, durations are whole seconds, and it has been used on one real
+  Daily Mix so far.
 - Each Daily Mix is exported by hand, one click per playlist, and synced with one
   command per file. Nothing runs on a schedule.
-- A song can be in your library and still not be found if Spotify and Apple Music
-  credit a different primary artist: the library search needs every word of the title
-  and of the first artist to be present.
+- A song with a very common one-word title can still go unfound if it is neither
+  among the first 60 results for title and artist nor among the first 25 for the title
+  alone. On the library the depths were measured on, no song is in that position; a
+  much larger library may need `search_limit` raised.
+- A song is found by its title. If Spotify and Apple Music write the title itself
+  differently (a translation, a different subtitle), neither search will reach it.
 - A different version of a song (live, remix, acoustic, demo) is not accepted in place
   of the one in the Daily Mix. It shows up as "closest" in the left-out list.
 - A song you skip in review is not remembered as skipped; you are asked again on the
@@ -787,13 +863,13 @@ can affect `sync`, which does not use the window.
 
 ## Next steps
 
-1. **Run it on real Daily Mixes.** Export your own mixes in a signed-in browser,
-   follow the checks in the extension README, and sync them. That is the one part of
-   the path nobody but you can try.
-2. **Tune matching on what real mixes show.** The first real exports already show near
-   misses that are plainly right yet land in review: a song whose copy in the library
-   sits on a compilation album (`Immigrant Song`, 89.8 where 90 is accepted), and an
-   artist credited differently (Jimi Hendrix on Spotify, The Jimi Hendrix Experience
-   in the library, 89.0). Real data is the right basis for adjusting those rules.
+1. **Look at the near misses in review.** Real exports show songs that are plainly
+   right yet land in review rather than being accepted: a song whose copy in the
+   library sits on a compilation album (`Immigrant Song`, 89.8 where 90 is accepted),
+   and an artist credited differently (Jimi Hendrix on Spotify, The Jimi Hendrix
+   Experience in the library, 89.0). These are scoring questions, not search ones, and
+   should be decided on real cases, not by moving a threshold.
+2. **More real Daily Mixes.** One has been through the whole path. The remaining
+   checks in the extension README are worth running on the others.
 3. **Several mixes at once.** Let `sync` take more than one export, so that a
    morning's Daily Mixes are one command.

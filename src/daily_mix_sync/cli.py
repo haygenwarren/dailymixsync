@@ -21,7 +21,7 @@ from .matcher import MatchResult, MatchStatus, ScoredCandidate
 from .models import SourceTrack
 from .music_app import MusicApp, MusicAppError, UnmanagedPlaylistError
 from .normalize import source_key
-from .review import review_results
+from .review import REVIEW_CHOICES, review_results
 from .sync import (
     PlaylistWriteError,
     destination_name,
@@ -55,6 +55,13 @@ def _describe_candidate(scored: ScoredCandidate) -> str:
     return f"{c.title} — {c.artist}{album} {_clock(c.duration_ms)}  (id {c.persistent_id})"
 
 
+def _how_found(result: MatchResult, scored: ScoredCandidate) -> str:
+    """A note for a candidate that only the broader, title-only search turned up."""
+    if scored.candidate.persistent_id in result.title_search_ids:
+        return "  [found by title search]"
+    return ""
+
+
 def _print_unresolved(heading: str, results: list[MatchResult], compact: bool = False) -> None:
     if not results:
         return
@@ -71,7 +78,7 @@ def _print_unresolved(heading: str, results: list[MatchResult], compact: bool = 
             print("      no search results")
         else:
             print(f"  {_describe_source(result.track)}")
-            print(f"      best {best.score:5.1f}  {_describe_candidate(best)}")
+            print(f"      best {best.score:5.1f}  {_describe_candidate(best)}{_how_found(result, best)}")
             print(f"                  {best.explain()}")
 
 
@@ -127,7 +134,10 @@ def _print_report(
         for result in results:
             if result.status is MatchStatus.MATCHED and result.best is not None:
                 print(f"  {_describe_source(result.track)}")
-                print(f"      new  {result.best.score:5.1f}  {_describe_candidate(result.best)}")
+                print(
+                    f"      new  {result.best.score:5.1f}  {_describe_candidate(result.best)}"
+                    f"{_how_found(result, result.best)}"
+                )
             elif result.status is MatchStatus.MANUAL and result.mapping is not None:
                 picked = next(c for c in result.candidates if c.candidate == result.chosen)
                 print(f"  {_describe_source(result.track)}")
@@ -342,10 +352,16 @@ def _find_in_library(args: argparse.Namespace) -> tuple[Settings, MusicApp, Matc
     track = SourceTrack(args.title, args.artist, args.album or "", args.duration)
     result = match_one(track, music, settings)
     print(f"Looking for: {_describe_source(track)}")
-    print(f"Library search {search_term(track)!r}: {len(result.candidates)} candidate(s)")
-    for scored in result.candidates:
-        print(f"  {scored.score:5.1f}  {_describe_candidate(scored)}")
+    by_title = len(result.title_search_ids)
+    print(f"Library search {search_term(track)!r}: {len(result.candidates) - by_title} candidate(s)")
+    if result.title_search:
+        print(f"Title search {result.title_search!r}: {by_title} more")
+    shown = result.candidates[:REVIEW_CHOICES]
+    for scored in shown:
+        print(f"  {scored.score:5.1f}  {_describe_candidate(scored)}{_how_found(result, scored)}")
         print(f"         {scored.explain()}")
+    if len(result.candidates) > len(shown):
+        print(f"  ... and {len(result.candidates) - len(shown)} more with lower scores")
 
     accept = settings.matching.auto_accept_threshold
     if result.best is None:

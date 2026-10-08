@@ -237,25 +237,44 @@ on run argv
 end run
 """
 
-# argv: search text, maximum rows. Songs only: the library also holds music videos.
+# argv: search text, maximum rows, where to look ("all", or "names" for song titles
+# only). Songs only: the library also holds music videos.
 _SEARCH = _HELPERS + """
 on run argv
 	set maxRows to (item 2 of argv) as integer
+	set titlesOnly to ((item 3 of argv) is "names")
 	set trackIDs to {}
 	set titles to {}
 	set artistNames to {}
 	set albumNames to {}
 	set lengths to {}
 	tell application "Music"
-		repeat with t in (search library playlist 1 for (item 1 of argv))
+		if titlesOnly then
+			set found to (search library playlist 1 for (item 1 of argv) only names)
+		else
+			set found to (search library playlist 1 for (item 1 of argv))
+		end if
+		repeat with t in found
 			if (count of trackIDs) >= maxRows then exit repeat
-			if media kind of t is song then
-				set end of trackIDs to persistent ID of t
-				set end of titles to name of t
-				set end of artistNames to artist of t
-				set end of albumNames to album of t
-				set end of lengths to duration of t
-			end if
+			-- One request per result: asking for each detail separately takes six
+			-- times as long. Music's search can also hand back an entry that is not
+			-- a readable track; that one is skipped, and since everything is read
+			-- before anything is kept, it cannot put the lists out of step.
+			try
+				set details to properties of t
+				if media kind of details is song then
+					set oneID to persistent ID of details
+					set oneTitle to name of details
+					set oneArtist to artist of details
+					set oneAlbum to album of details
+					set oneLength to duration of details
+					set end of trackIDs to oneID
+					set end of titles to oneTitle
+					set end of artistNames to oneArtist
+					set end of albumNames to oneAlbum
+					set end of lengths to oneLength
+				end if
+			end try
 		end repeat
 	end tell
 	return my trackRows(trackIDs, titles, artistNames, albumNames, lengths)
@@ -432,18 +451,25 @@ class MusicApp:
             raise MusicAppError(f"Music has no playlist named {name!r}")
         return _tracks(self._run(_PLAYLIST_TRACKS, [playlist.persistent_id]))
 
-    def search_songs(self, term: str, limit: int) -> list[AppleCandidate]:
-        """Songs in the local library matching every word of `term`.
+    def search_songs(
+        self, term: str, limit: int, titles_only: bool = False
+    ) -> list[AppleCandidate]:
+        """The first `limit` songs in the local library matching every word of `term`.
 
         Music matches each word as a prefix of a word in the song's details
         (title, artist, album, and others such as composer), in any order, ignoring
         case, accents and punctuation. One word that is absent sinks the match, so
-        "and" is dropped: it is "&" as often as not.
+        "and" is dropped: it is "&" as often as not. With `titles_only`, the words
+        are looked for in song titles and nowhere else.
+
+        Results come in the library's own order, not by relevance, so the song
+        that is wanted can be anywhere among them.
         """
         words = [word for word in term.split() if word.casefold() != "and"]
         if not words:
             return []  # Music answers an empty search with error -50
-        return _tracks(self._run(_SEARCH, [" ".join(words), str(limit)]))
+        area = "names" if titles_only else "all"
+        return _tracks(self._run(_SEARCH, [" ".join(words), str(limit), area]))
 
     def has_track(self, persistent_id: str) -> bool:
         return self._run(_HAS_TRACK, [persistent_id]) == "true"

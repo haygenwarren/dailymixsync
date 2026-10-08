@@ -204,9 +204,12 @@ def test_tracks_are_only_deleted_through_a_playlist_never_the_library():
 
 def test_scripts_avoid_names_that_music_reserves():
     # Inside `tell application "Music"`, these are search-area constants, and
-    # assigning to them fails with error -10006.
+    # assigning to them fails with error -10006. The one place such a word belongs is
+    # after `only`, where the search is told to look at song titles alone.
     for script in {**READ_SCRIPTS, **CHANGE_SCRIPTS}.values():
-        assert not re.search(r"\b(names|artists|albums|composers|displayed)\b", code_of(script))
+        code = re.sub(r'"[^"]*"', '""', code_of(script)).replace(" only names)", ")")
+        assert not re.search(r"\b(names|artists|albums|composers|displayed)\b", code)
+    assert code_of(music_app._SEARCH).count("only names") == 1
 
 
 def test_reading_tracks_guards_against_the_empty_playlist_error():
@@ -305,7 +308,7 @@ def test_search_sends_the_term_and_limit_as_arguments(music, fake):
     music.search_songs("you shook me all night long ac dc", 7)
     script, args = fake.calls[-1]
     assert script is music_app._SEARCH
-    assert args == ["you shook me all night long ac dc", "7"]
+    assert args == ["you shook me all night long ac dc", "7", "all"]
     assert "shook" not in script  # values never end up inside the script text
 
 
@@ -320,7 +323,7 @@ def test_search_drops_the_word_and():
     MusicApp(run=lambda script, args: sent.append(args) or "").search_songs(
         "rock And roll led zeppelin", 5
     )
-    assert sent == [["rock roll led zeppelin", "5"]]
+    assert sent == [["rock roll led zeppelin", "5", "all"]]
 
 
 @pytest.mark.parametrize("term", ["", "   ", "and", " and  AND "])

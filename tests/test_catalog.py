@@ -268,7 +268,9 @@ def test_quitting_the_catalog_review_stops_the_step_and_keeps_earlier_work(local
 
 
 def test_the_library_is_polled_until_the_added_song_shows_up(local, music, ui, store, clock):
-    ui.appear_after = 4  # visible on the fourth library search after the add
+    # Visible on the seventh library search after the add. Looking for a song that is
+    # not there yet takes two searches, so that is the fourth look.
+    ui.appear_after = 7
     results, _ = resolve_missing(local, music, ui, store, SETTINGS)
     assert by_title(results)["Mr. Brightside"].chosen.persistent_id == "LIB903"
     assert clock["slept"] >= 3

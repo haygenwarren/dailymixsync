@@ -24,7 +24,14 @@ class ConfigError(Exception):
 @dataclass(frozen=True)
 class Settings:
     database_path: Path = Path("data/mappings.sqlite3")
-    search_limit: int = 10  # candidates requested per search
+    # How many results are taken from each library search. Music answers in the
+    # library's own order, not best first, so the song that is wanted can be well
+    # down the list: a search for an album's title track brings back the whole album.
+    # Measured on a library of 4,087 songs, these two depths together reach every
+    # song from its own title and artist; 10 and 0, the earlier behaviour, missed 46.
+    # Depth only widens what is looked at. The matcher decides what is accepted.
+    search_limit: int = 60  # title and artist, anywhere in a song's details
+    title_search_limit: int = 25  # title alone, in song titles; 0 turns this search off
     # Only playlists named this, or this plus a space and more, are ever changed.
     managed_playlist_prefix: str = DEFAULT_MANAGED_PREFIX
     # Experimental catalog commands only: how long to wait for a song added from the
@@ -64,6 +71,13 @@ def load_settings(path: Path | None = None) -> Settings:
         search_limit = raw.get("search_limit", Settings.search_limit)
         if isinstance(search_limit, bool) or not isinstance(search_limit, int) or search_limit < 1:
             raise ValueError("search_limit must be a whole number >= 1")
+        title_search_limit = raw.get("title_search_limit", Settings.title_search_limit)
+        if (
+            isinstance(title_search_limit, bool)
+            or not isinstance(title_search_limit, int)
+            or title_search_limit < 0
+        ):
+            raise ValueError("title_search_limit must be a whole number >= 0 (0 turns it off)")
         prefix = raw.get("managed_playlist_prefix", Settings.managed_playlist_prefix)
         if not isinstance(prefix, str) or not prefix or prefix != prefix.strip():
             raise ValueError(
@@ -75,6 +89,7 @@ def load_settings(path: Path | None = None) -> Settings:
         return Settings(
             database_path=Path(raw.get("database_path", Settings.database_path)),
             search_limit=search_limit,
+            title_search_limit=title_search_limit,
             managed_playlist_prefix=prefix,
             catalog_wait_s=catalog_wait_s,
             matching=MatchConfig(**matching),

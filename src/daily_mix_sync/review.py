@@ -10,6 +10,15 @@ from .matcher import MatchResult, MatchStatus, ScoredCandidate
 from .models import MANUAL
 
 
+# A search can bring back dozens of candidates. Review offers the best of them.
+REVIEW_CHOICES = 10
+
+
+def choices(result: MatchResult) -> tuple[ScoredCandidate, ...]:
+    """The candidates a person is asked to choose among: the best few, best first."""
+    return result.candidates[:REVIEW_CHOICES]
+
+
 def _clock(duration_ms: int | None) -> str:
     if duration_ms is None:
         return "-:--"
@@ -27,7 +36,7 @@ def _show_question(
         show(f"   {line}")
     show(f"   {_clock(track.duration_ms)}")
     show("\nCandidates:")
-    for index, scored in enumerate(result.candidates, start=1):
+    for index, scored in enumerate(choices(result), start=1):
         c = scored.candidate
         show(f"\n{index:2d}. {c.title}")
         for line in (c.artist, c.album or "(album unknown)", _clock(c.duration_ms)):
@@ -74,7 +83,7 @@ def review_results(
     for number, index in enumerate(pending, start=1):
         result = reviewed[index]
         _show_question(result, number, len(pending), show)
-        answer = ask_selection(result.candidates, ask, show)
+        answer = ask_selection(choices(result), ask, show)
         if answer == "quit":
             break
         if isinstance(answer, ScoredCandidate):

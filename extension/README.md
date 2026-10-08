@@ -230,7 +230,9 @@ It cannot open a Daily Mix, which needs your account. For that, see the next sec
 
 ## Trying it on your own Daily Mixes
 
-This part needs you, signed in, and has not been done by anyone else.
+This part needs you, signed in. The first check has been done once, on one Daily Mix
+of 50 tracks, on 2026-10-07; the file validated with all 50 usable. The rest have not
+been reported.
 
 1. Export a Daily Mix. Compare the popup's track count, first song and last song with
    the page.
@@ -246,9 +248,9 @@ If any step fails, **Copy debug info** has what is needed to fix it.
 
 ## Known limits
 
-- **Checked only on public playlists, signed out, in Chrome 154** (2026-10-07). A
-  Daily Mix page is built from the same parts, but it has not been confirmed by a
-  signed-in run.
+- **Checked on public playlists, signed out, in Chrome 154, and on one real Daily Mix,
+  signed in** (2026-10-07). Exporting a Daily Mix from mid-scroll, and a second mix,
+  have not been reported.
 - **Spotify can change its markup at any time.** The extension then fails with a
   message rather than exporting something wrong, and `spotify_dom.js` needs updating.
 - **Local files and podcast episodes are left out.** They have no Spotify track

@@ -30,6 +30,20 @@ def test_example_config_spells_out_the_defaults():
     assert load_settings(EXAMPLE) == Settings()
 
 
+def test_the_search_depths_can_be_set(tmp_path):
+    settings = load_settings(write(tmp_path, {"search_limit": 40, "title_search_limit": 12}))
+    assert (settings.search_limit, settings.title_search_limit) == (40, 12)
+
+
+def test_the_title_search_can_be_turned_off_in_the_config(tmp_path):
+    assert load_settings(write(tmp_path, {"title_search_limit": 0})).title_search_limit == 0
+
+
+def test_the_default_depths_are_the_measured_ones():
+    # Chosen from a measurement over a real library; see the comment in config.py.
+    assert (Settings().search_limit, Settings().title_search_limit) == (60, 25)
+
+
 def test_overrides(tmp_path):
     settings = load_settings(
         write(
@@ -75,6 +89,10 @@ def test_missing_explicit_config_file(tmp_path):
         ({"matching": {"flag_penalties": {"liev": 1}}}, "unknown flag_penalties keys"),
         ({"search_limit": 0}, "search_limit must be"),
         ({"search_limit": "ten"}, "search_limit must be"),
+        ({"title_search_limit": -1}, "title_search_limit must be"),
+        ({"title_search_limit": "deep"}, "title_search_limit must be"),
+        ({"title_search_limit": True}, "title_search_limit must be"),
+        ({"title_search_limit": 2.5}, "title_search_limit must be"),
         ({"managed_playlist_prefix": ""}, "managed_playlist_prefix must be"),
         ({"managed_playlist_prefix": " Spotify Daily Mix"}, "managed_playlist_prefix must be"),
         ({"managed_playlist_prefix": 7}, "managed_playlist_prefix must be"),
