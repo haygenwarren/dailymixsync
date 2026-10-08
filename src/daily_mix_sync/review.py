@@ -76,19 +76,35 @@ def review_results(
     automatic match. A skipped track stays as it was and will be asked about again.
     `ask` and `show` default to the keyboard and the screen.
     """
+    return review_until_quit(results, store, ask, show)[0]
+
+
+def review_until_quit(
+    results: Sequence[MatchResult],
+    store: MappingStore,
+    ask: Callable[[str], str] | None = None,
+    show: Callable[[str], None] | None = None,
+) -> tuple[list[MatchResult], bool]:
+    """Like review_results, and also say whether the person asked to stop.
+
+    That matters when several playlists are reviewed in a row: quitting ends the
+    questions for all of them, not just for the one in hand.
+    """
     ask = input if ask is None else ask
     show = print if show is None else show
     reviewed = list(results)
+    stopped = False
     pending = [i for i, result in enumerate(reviewed) if result.status is MatchStatus.REVIEW]
     for number, index in enumerate(pending, start=1):
         result = reviewed[index]
         _show_question(result, number, len(pending), show)
         answer = ask_selection(choices(result), ask, show)
         if answer == "quit":
+            stopped = True
             break
         if isinstance(answer, ScoredCandidate):
             mapping = store.save(result.track, answer.candidate, answer.score, MANUAL)
             reviewed[index] = replace(
                 result, status=MatchStatus.MANUAL, chosen=answer.candidate, mapping=mapping
             )
-    return reviewed
+    return reviewed, stopped

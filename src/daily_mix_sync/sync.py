@@ -132,6 +132,31 @@ def match_playlist(
     return results
 
 
+def apply_stored(
+    results: Sequence[MatchResult], catalog: CatalogSearch, store: MappingStore
+) -> list[MatchResult]:
+    """Bring unresolved results up to date with mappings stored since they were made.
+
+    When several playlists are handled in one run, a choice made by hand for a track
+    in one of them is stored at once. The same track in a later playlist was matched
+    before that, and still says "needs review"; this gives it the stored answer, so
+    the question is not asked twice. Nothing is searched for.
+    """
+    updated = list(results)
+    for index, result in enumerate(updated):
+        if result.status is not MatchStatus.REVIEW:
+            continue
+        mapping = store.get(source_key(result.track))
+        if mapping is None:
+            continue
+        live = catalog.get_track(mapping.persistent_id)
+        if live is not None:
+            updated[index] = replace(
+                result, status=MatchStatus.CACHED, mapping=mapping, chosen=live
+            )
+    return updated
+
+
 # --- writing the playlist ---------------------------------------------------------
 
 

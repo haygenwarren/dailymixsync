@@ -121,6 +121,50 @@ Music cannot describe is skipped inside the script rather than failing the searc
 A match result records the title query, if one was made, and which candidates only it
 found, so the command line can say so.
 
+## Several exports in one sync
+
+`sync` takes one export or several. One export runs the original code path, unchanged.
+Several run the same building blocks, `match_playlist`, the review loop and
+`write_playlist`, in an order chosen so that nothing is written until everything is
+known:
+
+```
+load every export                     a bad file ends the run here
+work out every destination            unmanaged name, or two exports for one playlist: ends here
+look up each destination in Music     two playlists of that name in Music: ends here
+match every track of every export     one mapping database for all
+review, playlist by playlist          each track asked about once
+print one report per export, then the plan
+ask once                              anything but yes: nothing changes
+write the playlists one at a time     each with its own snapshot, check and restore
+print the summary                     exit 1 if any playlist failed, 130 if interrupted
+```
+
+**No batch transaction, on purpose.** Each playlist write is already as close to a
+transaction as Music allows: the contents are recorded, replaced, read back and
+compared, and put back on any failure. A batch is a sequence of those, not one big
+one. When a playlist fails, it is restored and the next is tried; playlists already
+written are left alone. Undoing finished, verified writes because a later one failed
+would mean more changes to Music at the moment something is known to be going wrong,
+and would give a worse result than the one being avoided. The exception is an
+interrupt: the person asked the run to stop, so the playlist in hand is restored and
+the rest are not started.
+
+**Why collisions are checked by name without regard to case.** Music does not tell
+two playlists apart by capitals when one is looked up by name, so `Daily Mix 1` and
+`daily mix 1` are treated as the same destination and refused together.
+
+**The cache does the sharing.** There is no batch-wide matching structure. Exports are
+matched one after another against the same `MappingStore`; a song matched for the
+first is found there by the second, checked to be still in the library, and not
+searched for again. The one thing the store cannot do by itself is reach back: a
+choice made by hand during review is stored at once, but the same track in another
+export was matched before that and still says "needs review". `sync.apply_stored`
+brings such results up to date after the review, without searching.
+
+**A mix with nothing in the library** is left out of the writing step altogether, so
+its playlist is not emptied and, if it does not exist yet, not created.
+
 ## Spotify export extension
 
 `extension/` is a Manifest V3 Chrome extension in plain JavaScript: no framework, no
@@ -543,12 +587,20 @@ All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
   not do: versions and same-titled songs it turns up are still rejected by the
   matcher. It came out of an audit of a real Daily Mix and a real library; the songs
   in it are made up, apart from a few public ones named as cases to keep right.
+- **`tests/test_cli_sync_batch.py`** covers a sync of several exports: that everything
+  is matched before the first playlist is touched, that a bad file or a destination
+  clash changes nothing, the single confirmation, review across playlists, the shared
+  cache, a mix with nothing in the library, and above all the failure paths, where one
+  playlist fails in various ways and the others must come out right. The stand-in
+  Music can be told to fail the n-th time a given script is sent, which is how a
+  failure is placed in the second or the last playlist of a batch.
 - **Live tests** (`tests/integration/`, marker `music_app`) drive the real app through
-  AppleScript and run only with `pytest --music-app`. They change one playlist,
-  `Spotify Daily Mix TEST`, including a full library-only `sync` into it; they put its
-  contents back afterwards, never delete it, and assert that the library and every
-  other playlist are unchanged. `test_search_live.py` is the exception: it only
-  searches, and can be run on its own when nothing may be touched.
+  AppleScript and run only with `pytest --music-app`. They change `Spotify Daily Mix
+  TEST`, including a full library-only `sync` into it, and, for a sync of two exports,
+  `Spotify Daily Mix TEST 1` and `TEST 2`. They put the contents back afterwards,
+  never delete a playlist, and assert that the library and every other playlist are
+  unchanged. `test_search_live.py` is the exception: it only searches, and can be run
+  on its own when nothing may be touched.
 - **Experimental.** The catalog code has unit tests against a stand-in for the Music
   window (`tests/fake_ui.py`), tests that read the window scripts as text for what
   they are allowed to do, and six read-only live tests behind their own switch,

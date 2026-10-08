@@ -201,6 +201,44 @@ def test_supported_commands_never_touch_the_window_or_ask_about_accessibility(
     assert (code, err) == (0, "")
 
 
+@pytest.fixture
+def second_export(tmp_path):
+    path = tmp_path / "daily_mix_2.json"
+    path.write_text(
+        json.dumps({"playlist_name": "Daily Mix 2", "tracks": list(reversed(TRACKS))}), encoding="utf-8"
+    )
+    return str(path)
+
+
+@pytest.mark.parametrize("options", [("--dry-run",), ("--yes",), ("--yes", "--no-review")])
+def test_a_sync_of_several_exports_is_as_library_only_as_a_sync_of_one(
+    fake, export, second_export, capsys, options
+):
+    """The tripwires in the fixture would raise if the window were touched."""
+    library_before = dict(fake.library)
+    code, out, err = run(capsys, "sync", export, second_export, *options)
+    assert (code, err) == (0, "")
+    assert fake.library == library_before  # nothing was added to the library
+    assert set(fake.scripts_sent()) <= set(fake._handlers)
+    for script in fake.scripts_sent():
+        assert "System Events" not in script
+        assert "Add to Library" not in script
+    assert {script for script, _ in fake.changes()} <= {
+        music_app._CREATE_PLAYLIST, music_app._CLEAR_PLAYLIST, music_app._ADD_TRACKS,
+    }
+    changed = {args[0] if script is music_app._CREATE_PLAYLIST else args[1] for script, args in fake.changes()}
+    assert changed == (set() if options == ("--dry-run",) else {DEST, "Spotify Daily Mix 2"})
+    assert fake.playlist("Spotify Liked Songs").track_ids == ["B1"]
+    # Songs that are not in the library are left out of both, and that is not an error.
+    assert out.count("Only songs already in your library are used. Nothing is added to it.") == 2
+
+
+def test_sync_of_several_exports_still_has_no_catalog_option(fake, export, second_export, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["sync", export, second_export, "--catalog"])
+    assert fake.calls == []
+
+
 def test_validate_needs_neither_music_nor_any_permission(fake, export, capsys):
     code, out, _ = run(capsys, "validate", export)
     assert code == 0 and "5 usable track(s)" in out

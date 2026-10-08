@@ -11,6 +11,7 @@ import argparse
 import logging
 import sqlite3
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .apple_music import CatalogError, CatalogSearch, MockCatalog
@@ -19,11 +20,12 @@ from .database import MappingStore
 from .importer import InputError, Playlist, load_playlist
 from .matcher import MatchResult, MatchStatus, ScoredCandidate
 from .models import SourceTrack
-from .music_app import MusicApp, MusicAppError, UnmanagedPlaylistError
+from .music_app import MusicApp, MusicAppError, MusicPlaylist, UnmanagedPlaylistError
 from .normalize import source_key
-from .review import REVIEW_CHOICES, review_results
+from .review import REVIEW_CHOICES, review_results, review_until_quit
 from .sync import (
     PlaylistWriteError,
+    apply_stored,
     destination_name,
     match_one,
     match_playlist,
@@ -244,21 +246,51 @@ def _print_write_failure(destination: str, error: PlaylistWriteError) -> None:
         print(f"    {track.title} — {track.artist}", file=out)
 
 
-def _cmd_sync(args: argparse.Namespace) -> int:
-    """Write the songs of an export that are already in the Music library to its playlist.
+def _managed_destination(music: MusicApp, playlist_name: str, into: str | None) -> str:
+    """The playlist an export is written to: `into`, or the one named after the export.
 
-    Songs the library does not have are left out; nothing is ever added to the
-    library, and only AppleScript is used.
+    Refuses anything outside the managed playlists.
     """
-    settings = load_settings(args.config)
-    playlist = load_playlist(args.playlist)
-    music = MusicApp(settings.managed_playlist_prefix)
-    destination = args.destination or destination_name(playlist.name, music.managed_prefix)
+    destination = into or destination_name(playlist_name, music.managed_prefix)
     if not music.is_managed(destination):
         raise UnmanagedPlaylistError(
             f"refusing to write to playlist {destination!r}: only {music.managed_prefix!r} and "
             f"playlists starting with {music.managed_prefix + ' '!r} may be changed"
         )
+    return destination
+
+
+def _print_destination(destination: str, existing: MusicPlaylist | None, new_count: int) -> None:
+    previous = "(new playlist)" if existing is None else f"{existing.track_count:>4}"
+    print(f"\nDestination:\n{destination}\n")
+    print(f"{'Previous tracks:':<25}{previous}")
+    print(f"{'New tracks:':<25}{new_count:>4}")
+
+
+NOT_CONFIRMED = (
+    "error: not confirmed. Replacing a playlist's contents needs a yes at the "
+    "prompt, or --yes when there is no one to ask."
+)
+
+
+def _cmd_sync(args: argparse.Namespace) -> int:
+    """Write the songs of each export that are already in the Music library to its playlist.
+
+    Songs the library does not have are left out; nothing is ever added to the
+    library, and only AppleScript is used. One export is handled exactly as it
+    always was; several are resolved together first and then written one by one.
+    """
+    if len(args.playlist) == 1:
+        return _sync_one(args, args.playlist[0])
+    return _sync_several(args, args.playlist)
+
+
+def _sync_one(args: argparse.Namespace, path: Path) -> int:
+    """Sync one export to its playlist: match, report, ask, write."""
+    settings = load_settings(args.config)
+    playlist = load_playlist(path)
+    music = MusicApp(settings.managed_playlist_prefix)
+    destination = _managed_destination(music, playlist.name, args.destination)
 
     # Everything that can go wrong with matching happens before the playlist is touched.
     database_path = args.db or settings.database_path
@@ -272,14 +304,11 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     waiting = sum(result.status is MatchStatus.REVIEW for result in results)
     if waiting:
         print(f"\n{waiting} track(s) need review and are left out. To decide them, run:")
-        print(f"  python -m daily_mix_sync review {args.playlist}")
+        print(f"  python -m daily_mix_sync review {path}")
 
     track_ids = [result.chosen.persistent_id for result in results if result.chosen is not None]
     existing = music.find_playlist(destination)
-    previous = "(new playlist)" if existing is None else f"{existing.track_count:>4}"
-    print(f"\nDestination:\n{destination}\n")
-    print(f"{'Previous tracks:':<25}{previous}")
-    print(f"{'New tracks:':<25}{len(track_ids):>4}")
+    _print_destination(destination, existing, len(track_ids))
 
     if not track_ids:
         print(
@@ -293,11 +322,7 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         return 0
     if not args.yes:
         if not _interactive():
-            print(
-                "error: not confirmed. Replacing a playlist's contents needs a yes at the "
-                "prompt, or --yes when there is no one to ask.",
-                file=sys.stderr,
-            )
+            print(NOT_CONFIRMED, file=sys.stderr)
             return 1
         if existing is None:
             question = f"Create {destination!r} with these {len(track_ids)} track(s)?"
@@ -318,6 +343,294 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         return 1
     print("\n✓ Playlist updated and verified.")
     return 0
+
+
+# --- several exports in one run -------------------------------------------------
+#
+# The order is what keeps this safe: every export is loaded, every destination is
+# settled and every track is matched before the first playlist is touched. After
+# that each playlist is written on its own, with its own record of what it held, its
+# own check, and its own restore. One that fails does not undo or stop the others.
+
+
+@dataclass
+class _Job:
+    """One export on its way to one managed playlist, as part of a batch."""
+
+    path: Path
+    playlist: Playlist
+    destination: str
+    existing: MusicPlaylist | None = None  # the destination as it is now, if it exists
+    results: list[MatchResult] = field(default_factory=list)
+    outcome: str = ""  # what became of it, for the summary
+    failed: bool = False  # it was to be written, and was not
+
+    @property
+    def track_ids(self) -> list[str]:
+        return [r.chosen.persistent_id for r in self.results if r.chosen is not None]
+
+    def count(self, status: MatchStatus) -> int:
+        return sum(result.status is status for result in self.results)
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
+def _load_jobs(paths: list[Path], music: MusicApp) -> list[_Job]:
+    """Read every export and work out where each goes. Any problem raises."""
+    jobs = []
+    for path in paths:
+        playlist = load_playlist(path)
+        if not playlist.tracks:
+            raise InputError(f"{path}: none of its entries can be used")
+        jobs.append(_Job(path, playlist, _managed_destination(music, playlist.name, None)))
+    return jobs
+
+
+def _clashing_destinations(jobs: list[_Job]) -> list[list[_Job]]:
+    """Groups of exports that would be written to the same playlist.
+
+    Names are compared without regard to case: Music does not tell two playlists
+    apart by capitals when it looks one up.
+    """
+    by_destination: dict[str, list[_Job]] = {}
+    for job in jobs:
+        by_destination.setdefault(job.destination.casefold(), []).append(job)
+    return [group for group in by_destination.values() if len(group) > 1]
+
+
+def _review_batch(jobs: list[_Job], music: MusicApp, store: MappingStore) -> None:
+    """Ask about the tracks that need review, one playlist after another.
+
+    A track is asked about once, however many of the playlists it is in. A choice
+    is stored at once and given to the other playlists at the end; a track that was
+    skipped is not brought up again in this run. Quitting ends the questions for all.
+    """
+    asked: set[str] = set()
+    for job in jobs:
+        pending = [
+            index
+            for index, result in enumerate(job.results)
+            if result.status is MatchStatus.REVIEW and source_key(result.track) not in asked
+        ]
+        if not pending:
+            continue
+        print(f"\n{job.playlist.name} — needs review")
+        reviewed, stopped = review_until_quit([job.results[i] for i in pending], store)
+        for index, result in zip(pending, reviewed, strict=True):
+            job.results[index] = result
+            asked.add(source_key(result.track))
+        if stopped:
+            break
+    for job in jobs:  # a choice made for one playlist settles the same track in the others
+        job.results = apply_stored(job.results, music, store)
+
+
+def _print_plan(jobs: list[_Job], heading: str) -> None:
+    width = max(len(job.destination) for job in jobs)
+    print(f"\n{heading}\n")
+    for job in jobs:
+        count = len(job.track_ids)
+        if not count:
+            continue
+        now = "new playlist" if job.existing is None else f"currently {job.existing.track_count}"
+        print(f"{job.destination:<{width}}  {count:>4} {'track ' if count == 1 else 'tracks'}  ({now})")
+    unchanged = [job for job in jobs if not job.track_ids]
+    if unchanged:
+        print("\nLeft unchanged:\n")
+        for job in unchanged:
+            tracks = _plural(len(job.playlist.tracks), "track")
+            print(f"{job.destination:<{width}}  none of its {tracks} are in your library")
+
+
+def _print_summary(jobs: list[_Job], heading: str) -> None:
+    width = max(len("Playlist"), *(len(job.playlist.name) for job in jobs))
+    header = f"{'Playlist':<{width}}  {'Spotify':>7}  {'In library':>10}   Result"
+    print(f"\n{heading}\n")
+    print(header)
+    print("-" * (len(header) + 14))
+    for job in jobs:
+        print(
+            f"{job.playlist.name:<{width}}  {len(job.playlist.tracks):>7}  "
+            f"{len(job.track_ids):>10}   {job.outcome}"
+        )
+    totals = [
+        ("Total Spotify tracks", sum(len(job.playlist.tracks) for job in jobs)),
+        ("Already in library", sum(len(job.track_ids) for job in jobs)),
+        ("Intentionally left out", sum(job.count(MatchStatus.FAILED) for job in jobs)),
+    ]
+    waiting = sum(job.count(MatchStatus.REVIEW) for job in jobs)
+    if waiting:
+        totals.append(("Waiting for review", waiting))
+    print()
+    for label, count in totals:
+        print(f"{label + ':':<25}{count:>4}")
+
+
+def _write_batch(music: MusicApp, writable: list[_Job]) -> bool:
+    """Write each playlist in turn. Returns whether the run was interrupted.
+
+    A failure is reported and the next playlist is tried: each write records what
+    the playlist held and puts it back if anything goes wrong, so one failure
+    leaves the others as they should be. An interrupt is different. The person has
+    asked for the run to stop, so the playlist in hand is restored and the rest are
+    not started.
+    """
+    interrupted = False
+    for job in writable:
+        if interrupted:
+            job.outcome = "– not attempted: the run was interrupted"
+            continue
+        try:
+            report = write_playlist(music, job.destination, job.track_ids)
+        except PlaylistWriteError as error:
+            _print_write_failure(job.destination, error)
+            job.failed = True
+            job.outcome = (
+                "✗ write failed; previous contents restored"
+                if error.restored
+                else "✗ write failed; previous contents NOT restored"
+            )
+            interrupted = isinstance(error.__cause__, KeyboardInterrupt)
+        except MusicAppError as error:
+            # Raised before the playlist's contents were touched: while finding it,
+            # creating it, or reading what it holds.
+            print(f"ERROR: {job.destination!r} was not updated: {error}", file=sys.stderr)
+            job.failed = True
+            job.outcome = "✗ not updated; its contents were not touched"
+        except KeyboardInterrupt:
+            job.outcome = "– not attempted: the run was interrupted"
+            interrupted = True
+        else:
+            job.outcome = "✓ created" if report.created else "✓ updated"
+            print(f"✓ {job.destination}: {_plural(report.written, 'track')} written and verified.")
+    return interrupted
+
+
+def _sync_several(args: argparse.Namespace, paths: list[Path]) -> int:
+    """Sync several exports, each to its own playlist, with one question for all."""
+    settings = load_settings(args.config)
+    if args.destination is not None:
+        print(
+            f"error: --into names a single playlist, so it cannot be used with {len(paths)} "
+            "exports. Each export goes to the playlist named after it; to choose another, "
+            "sync that file on its own.",
+            file=sys.stderr,
+        )
+        return 1
+    music = MusicApp(settings.managed_playlist_prefix)
+
+    # Whatever is wrong with a file or a destination ends the run here, before Music
+    # is asked to change anything.
+    jobs = _load_jobs(paths, music)
+    clashes = _clashing_destinations(jobs)
+    if clashes:
+        for group in clashes:
+            print(
+                f"error: {len(group)} exports would be written to the same playlist, "
+                f"{group[0].destination!r}:",
+                file=sys.stderr,
+            )
+            for job in group:
+                print(f"  {job.path}  ({job.playlist.name})", file=sys.stderr)
+        print(
+            "Nothing was changed. Leave one of them out, or sync them one at a time.",
+            file=sys.stderr,
+        )
+        return 1
+    for job in jobs:
+        job.existing = music.find_playlist(job.destination)
+
+    # One mapping database for all of them: a song in several mixes is matched once.
+    database_path = args.db or settings.database_path
+    print(f"Matching {len(jobs)} exports against your Music library:", flush=True)
+    with MappingStore(database_path) as store:
+        for job in jobs:
+            job.results = match_playlist(job.playlist, music, store, settings)
+            waiting = job.count(MatchStatus.REVIEW)
+            review = f", {waiting} for review" if waiting else ""
+            print(
+                f"  {job.playlist.name}: {len(job.track_ids)} of {len(job.playlist.tracks)} "
+                f"in your library{review}",
+                flush=True,
+            )
+        if not args.dry_run and not args.no_review and _interactive():
+            _review_batch(jobs, music, store)
+
+    for job in jobs:
+        print()
+        _print_report(job.playlist, job.results, args.details, live=True, compact=not args.details)
+        waiting = job.count(MatchStatus.REVIEW)
+        if waiting:
+            print(f"\n{waiting} track(s) need review and are left out. To decide them, run:")
+            print(f"  python -m daily_mix_sync review {job.path}")
+        _print_destination(job.destination, job.existing, len(job.track_ids))
+        if not job.track_ids:
+            job.outcome = "– left unchanged: nothing in library"
+            print(
+                f"\nNone of its {_plural(len(job.playlist.tracks), 'track')} are in your Music "
+                f"library, so {job.destination!r} is left as it is."
+            )
+
+    writable = [job for job in jobs if job.track_ids]
+    if not writable:
+        _print_summary(jobs, "Batch sync: nothing to write")
+        print(
+            f"error: none of the tracks in these {len(jobs)} exports are in your Music library; "
+            "no playlist was changed",
+            file=sys.stderr,
+        )
+        return 1
+    if args.dry_run:
+        for job in writable:
+            job.outcome = "would be created" if job.existing is None else "would be updated"
+        _print_plan(jobs, "Would update:")
+        _print_summary(jobs, "Batch dry run")
+        print("\nNo changes made (--dry-run).")
+        return 0
+
+    _print_plan(jobs, "Ready to update:")
+    if not args.yes:
+        if not _interactive():
+            print(NOT_CONFIRMED, file=sys.stderr)
+            return 1
+        try:
+            answer = input("\nContinue? [y/N] ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Nothing was changed.")
+            return 1
+
+    print()
+    interrupted = _write_batch(music, writable)
+    done = sum(job.outcome.startswith("✓") for job in jobs)
+    failed = sum(job.failed for job in jobs)
+    unchanged = len(jobs) - len(writable)
+    if interrupted:
+        heading = "Batch sync interrupted"
+    elif failed:
+        heading = "Batch sync finished with errors"
+    else:
+        heading = "Batch sync complete"
+    _print_summary(jobs, heading)
+    print()
+    if failed or interrupted:
+        closing = f"{done} of {_plural(len(writable), 'playlist')} updated."
+        if failed:
+            closing += f" {failed} failed; see the errors above."
+        if interrupted:
+            closing += " The run was interrupted before the rest were tried."
+    else:
+        closing = f"{_plural(done, 'playlist')} updated successfully."
+    if unchanged:
+        whose = "its" if unchanged == 1 else "their"
+        closing += f" {unchanged} left unchanged: none of {whose} tracks are in your library."
+    print(closing)
+    if interrupted:
+        return 130
+    return 1 if failed else 0
 
 
 # --- Music app commands: for trying the Music integration on its own ----------
@@ -508,13 +821,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="write the songs of an export that are already in your Music library to its "
         "managed playlist; songs you do not have are left out",
     )
-    sync.add_argument("playlist", type=Path, help="playlist export (JSON)")
+    sync.add_argument(
+        "playlist", type=Path, nargs="+", metavar="EXPORT",
+        help="playlist export (JSON). Several can be given: each goes to its own playlist, "
+        "and all are matched before any playlist is changed",
+    )
     sync.add_argument(
         "--dry-run", action="store_true",
         help="match and report, but do not create or change any playlist",
     )
     sync.add_argument(
-        "--yes", action="store_true", help="replace the playlist's contents without asking"
+        "--yes", action="store_true", help="replace the playlists' contents without asking"
     )
     sync.add_argument(
         "--no-review", action="store_true",
@@ -522,7 +839,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sync.add_argument(
         "--into", dest="destination", metavar="NAME",
-        help="write to this managed playlist instead of the one named after the export",
+        help="write to this managed playlist instead of the one named after the export "
+        "(with one export only)",
     )
     sync.add_argument("--db", type=Path, metavar="FILE", help="mapping database")
     sync.add_argument(

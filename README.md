@@ -97,7 +97,19 @@ mode → Load unpacked → the `extension/` folder).
 The export is used as it comes out of the extension; there is nothing to edit by hand.
 The sync stays **library-only**: the playlist `Spotify Daily Mix 1` gets the songs of
 the mix that are already in your Apple Music library, and the rest are listed and left
-out. Repeat from step 1 for each Daily Mix you want.
+out.
+
+**All your mixes at once.** Export each Daily Mix (steps 1 to 3), then give them all to
+one command:
+
+```sh
+python -m daily_mix_sync sync data/daily_mix_*.json --dry-run
+python -m daily_mix_sync sync data/daily_mix_*.json
+```
+
+Each export goes to its own playlist, everything is matched before any playlist is
+changed, and you are asked once for the whole lot. See
+[Several mixes at once](#several-mixes-at-once).
 
 The extension only reads the Spotify page. It does not start a sync, run Python, or
 talk to Music; the two halves meet in the JSON file and nowhere else.
@@ -141,6 +153,9 @@ python -m daily_mix_sync sync data/daily_mix_1.json
 
 # Later, unattended: no questions.
 python -m daily_mix_sync sync data/daily_mix_1.json --yes
+
+# Several mixes in one go. See "Several mixes at once" below.
+python -m daily_mix_sync sync data/daily_mix_*.json
 ```
 
 For a first try that cannot touch a playlist you care about, send the result to the
@@ -199,9 +214,9 @@ accepted as a match.
 | Option | Meaning |
 | --- | --- |
 | `--dry-run` | Match and report only. Creates, empties and adds nothing, and asks nothing. Matches found are still remembered. |
-| `--yes` | Do not ask before replacing the playlist's contents. |
-| `--no-review` | Do not ask about ambiguous songs; leave them out. |
-| `--into NAME` | Write to this managed playlist instead of the one named after the export. |
+| `--yes` | Do not ask before replacing the playlist's contents. With several exports, skips the one question for the batch. |
+| `--no-review` | Do not ask about ambiguous songs; leave them out. Applies to every export given. |
+| `--into NAME` | Write to this managed playlist instead of the one named after the export. Only with a single export. |
 | `--db FILE` | Mapping database. Default: `database_path` from the settings. |
 | `--details` | List every matched song and the track chosen for it. |
 
@@ -228,6 +243,112 @@ and leaves the playlist alone rather than emptying it.
 both the failure and the restore, with exit code 1. Music has no transactions, so this
 is a best effort: if the restore fails too, the command says manual intervention is
 needed and lists what the playlist held.
+
+### Several mixes at once
+
+`sync` takes any number of exports. Each one goes to the playlist named after it:
+
+```sh
+python -m daily_mix_sync sync \
+    data/daily_mix_1.json \
+    data/daily_mix_2.json \
+    data/daily_mix_3.json \
+    data/daily_mix_4.json
+```
+
+```
+Daily Mix 1 → Spotify Daily Mix 1
+Daily Mix 2 → Spotify Daily Mix 2
+Daily Mix 3 → Spotify Daily Mix 3
+Daily Mix 4 → Spotify Daily Mix 4
+```
+
+In practice you write `data/daily_mix_*.json`. That is your shell at work, not the
+tool: before the command starts, the shell replaces the pattern with the names of the
+files that match it, so the tool receives the same list as above. If no file matches,
+zsh stops with "no matches found" and the tool is never run.
+
+With one export, `sync` behaves exactly as described above. With several, the same
+steps happen in an order that keeps every playlist safe:
+
+1. **Everything is read and checked first.** Every export is loaded and every
+   destination worked out. A missing file, a file that is not valid JSON, an export
+   with no usable track, or two exports that would land in the same playlist stops the
+   run here, with nothing in Music changed.
+2. **Everything is matched.** All tracks of all exports, against one mapping database,
+   so a song that is in several mixes is looked for once.
+3. **Review, mix by mix.** Each question says which mix it belongs to. A track is asked
+   about once even if it is in several mixes, and your choice is used in all of them.
+   Quitting ends the questions for every mix; the run then carries on with what is
+   settled.
+4. **One report per mix**, in the order you gave the files, then the plan:
+
+   ```
+   Ready to update:
+
+   Spotify Daily Mix 1    37 tracks  (currently 34)
+   Spotify Daily Mix 2    42 tracks  (currently 40)
+   Spotify Daily Mix 3    31 tracks  (new playlist)
+   Spotify Daily Mix 4    16 tracks  (new playlist)
+
+   Continue? [y/N]
+   ```
+
+5. **One question for all of it.** Anything but yes changes nothing. `--yes` skips the
+   question; there is never one per playlist.
+6. **The playlists are written one at a time**, each with its own record of what it
+   held, its own check afterwards, and its own restore if something goes wrong.
+7. **A summary** of the whole run:
+
+   ```
+   Batch sync complete
+
+   Playlist     Spotify  In library   Result
+   -------------------------------------------------------
+   Daily Mix 1       50          37   ✓ updated
+   Daily Mix 2       50          42   ✓ updated
+   Daily Mix 3       50          31   ✓ created
+   Daily Mix 4       50          16   ✓ created
+
+   Total Spotify tracks:     200
+   Already in library:       126
+   Intentionally left out:    74
+
+   4 playlists updated successfully.
+   ```
+
+**If one playlist fails to write.** That playlist is put back as it was, the failure is
+reported, and the remaining playlists are still written. Playlists already finished are
+not undone: each one is complete and verified on its own, and undoing a good write
+would only add risk. The summary marks the one that failed, and the exit code is 1:
+
+```
+Daily Mix 3       50          31   ✗ write failed; previous contents restored
+```
+
+Songs that are not in your library are never counted as failures. "Intentionally left
+out" is about songs; a ✗ is about a playlist.
+
+**If you press Ctrl-C while it is writing.** The playlist in hand is put back, the rest
+are not started, the summary is still shown, and the exit code is 130.
+
+**A mix with nothing in your library.** Its playlist is left exactly as it is, not
+emptied, and the other mixes are synced as usual. It is listed under "Left unchanged"
+in the plan and in the summary. Only when not one mix has a song in your library is
+the run an error.
+
+**`--into` and several exports.** `--into` names one playlist, so it is refused when
+more than one export is given. Sync that file on its own to send it somewhere else.
+
+**Two exports, one playlist.** If two of the files would be written to the same
+playlist, for instance an old and a new export of the same Daily Mix, the run is
+refused and both files are named. The later one never silently overwrites the earlier.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Every playlist that had songs to write was written and verified. |
+| 1 | A problem before writing, not confirmed, no mix had any song in the library, or at least one playlist failed to write. |
+| 130 | Interrupted. |
 
 ## Reviewing ambiguous songs
 
@@ -447,10 +568,10 @@ upgraded in place the first time it is opened.
 python -m pytest
 ```
 
-691 tests: normalization, scoring, the SQLite store, input validation, config, the
+767 tests: normalization, scoring, the SQLite store, input validation, config, the
 mock catalog, cache validation, manual review, playlist writing with verification and
-rollback, the CLI, the Music adapter, the two-step library search, and reading the
-extension's export. Everything that would talk to Music runs against an in-memory
+rollback, the CLI, syncing several exports in one run, the Music adapter, the two-step
+library search, and reading the extension's export. Everything that would talk to Music runs against an in-memory
 stand-in for `osascript` (`tests/fake_music.py`), which can be told to fail at a
 chosen point and which, like Music, answers a search in library order. One file,
 `tests/test_search_recall.py`, covers how candidates are found and, above all, that
@@ -471,13 +592,16 @@ AppleScript and are skipped unless you ask for them:
 python -m pytest tests/integration --music-app
 ```
 
-26 tests, about a minute. Twenty of them read your library and change exactly one
+33 tests, about two minutes. Twenty of them read your library and change exactly one
 playlist, `Spotify Daily Mix TEST`, including a complete `sync` into it from a
-generated export. Afterwards its contents are put back exactly as they were found, and
-the tests check that your library size and every other playlist are unchanged. They
-use a temporary mapping database, so your real cache is not touched. They never delete
-the test playlist; if they had to create it, it is left in place, empty. They need
-only the Automation permission below.
+generated export. Seven more sync two exports in one run, into
+`Spotify Daily Mix TEST 1` and `Spotify Daily Mix TEST 2` and nowhere else. Afterwards
+the contents of all three are put back exactly as they were found, and the tests check
+that your library size and every other playlist are unchanged. They use a temporary
+mapping database, so your real cache is not touched. They never delete a test
+playlist; one they had to create is left in place, empty. Your real
+`Spotify Daily Mix 1`, `2` and so on are never used by a test. They need only the
+Automation permission below.
 
 The other six, in `tests/integration/test_search_live.py`, only search the library and
 change nothing at all, not even the test playlist. To run just those:
@@ -486,7 +610,7 @@ change nothing at all, not even the test playlist. To run just those:
 python -m pytest tests/integration/test_search_live.py --music-app
 ```
 
-The experimental catalog code has its own unit tests, included in the 691, and its
+The experimental catalog code has its own unit tests, included in the 767, and its
 own live switch; see [the experimental section](#experimental-apple-music-catalog-support).
 
 **The browser extension** has its own tests, in JavaScript, run with Node:
@@ -766,8 +890,10 @@ you granted it earlier and do not use those commands, you can switch it off agai
   [extension README](extension/README.md#known-limits): local files and podcast
   episodes are left out, durations are whole seconds, and it has been used on one real
   Daily Mix so far.
-- Each Daily Mix is exported by hand, one click per playlist, and synced with one
-  command per file. Nothing runs on a schedule.
+- Each Daily Mix is exported by hand, one click per playlist; one command then syncs
+  them all. Nothing runs on a schedule, and the browser does not start the sync.
+- In a sync of several exports, a track you skip in review is not asked about again
+  for the other mixes in that run, but it will be the next time.
 - A song with a very common one-word title can still go unfound if it is neither
   among the first 60 results for title and artist nor among the first 25 for the title
   alone. On the library the depths were measured on, no song is in that position; a
@@ -869,7 +995,9 @@ can affect `sync`, which does not use the window.
    and an artist credited differently (Jimi Hendrix on Spotify, The Jimi Hendrix
    Experience in the library, 89.0). These are scoring questions, not search ones, and
    should be decided on real cases, not by moving a threshold.
-2. **More real Daily Mixes.** One has been through the whole path. The remaining
-   checks in the extension README are worth running on the others.
-3. **Several mixes at once.** Let `sync` take more than one export, so that a
-   morning's Daily Mixes are one command.
+2. **Run the whole routine for a week.** Export every Daily Mix, sync them all with one
+   command, and note what gets in the way. That is the best guide to what, if
+   anything, should be made easier next.
+3. **A shorter path from browser to sync.** Today each mix is exported with a click and
+   the files are moved into `data/` by hand. Whether that step is worth automating, and
+   how, is better decided after some real use.
