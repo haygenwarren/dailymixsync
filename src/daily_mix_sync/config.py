@@ -34,6 +34,11 @@ class Settings:
     title_search_limit: int = 25  # title alone, in song titles; 0 turns this search off
     # Only playlists named this, or this plus a space and more, are ever changed.
     managed_playlist_prefix: str = DEFAULT_MANAGED_PREFIX
+    # sync-downloads: the folder the browser saves exports to, and how many hours old
+    # an export may be and still be used. An older one is left out, and said so, so
+    # that a file forgotten in Downloads is not synced weeks later by accident.
+    downloads_dir: Path = Path("~/Downloads")
+    export_max_age_hours: float = 24
     # Experimental catalog commands only: how long to wait for a song added from the
     # catalog to show up in the library. Normal sync never adds songs.
     catalog_wait_s: int = 30
@@ -83,6 +88,12 @@ def load_settings(path: Path | None = None) -> Settings:
             raise ValueError(
                 "managed_playlist_prefix must be non-empty text without outer spaces"
             )
+        downloads_dir = raw.get("downloads_dir", str(Settings.downloads_dir))
+        if not isinstance(downloads_dir, str) or not downloads_dir.strip():
+            raise ValueError("downloads_dir must be the path of a folder")
+        max_age = raw.get("export_max_age_hours", Settings.export_max_age_hours)
+        if isinstance(max_age, bool) or not isinstance(max_age, (int, float)) or max_age <= 0:
+            raise ValueError("export_max_age_hours must be a number of hours greater than 0")
         catalog_wait_s = raw.get("catalog_wait_s", Settings.catalog_wait_s)
         if isinstance(catalog_wait_s, bool) or not isinstance(catalog_wait_s, int) or catalog_wait_s < 1:
             raise ValueError("catalog_wait_s must be a whole number of seconds >= 1")
@@ -91,6 +102,8 @@ def load_settings(path: Path | None = None) -> Settings:
             search_limit=search_limit,
             title_search_limit=title_search_limit,
             managed_playlist_prefix=prefix,
+            downloads_dir=Path(downloads_dir),
+            export_max_age_hours=max_age,
             catalog_wait_s=catalog_wait_s,
             matching=MatchConfig(**matching),
         )

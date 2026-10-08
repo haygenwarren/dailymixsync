@@ -3,6 +3,8 @@
   "search_limit": 60,
   "title_search_limit": 25,
   "managed_playlist_prefix": "Spotify Daily Mix",
+  "downloads_dir": "~/Downloads",
+  "export_max_age_hours": 24,
   "catalog_wait_s": 30,
   "matching": {
     "auto_accept_threshold": 90,

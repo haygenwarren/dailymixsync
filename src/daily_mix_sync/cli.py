@@ -12,11 +12,13 @@ import logging
 import sqlite3
 import sys
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .apple_music import CatalogError, CatalogSearch, MockCatalog
 from .config import ConfigError, Settings, load_settings
 from .database import MappingStore
+from .downloads import Discovery, DownloadsError, FoundExport, discover
 from .importer import InputError, Playlist, load_playlist
 from .matcher import MatchResult, MatchStatus, ScoredCandidate
 from .models import SourceTrack
@@ -280,9 +282,14 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     library, and only AppleScript is used. One export is handled exactly as it
     always was; several are resolved together first and then written one by one.
     """
-    if len(args.playlist) == 1:
-        return _sync_one(args, args.playlist[0])
-    return _sync_several(args, args.playlist)
+    return _sync_paths(args, args.playlist)
+
+
+def _sync_paths(args: argparse.Namespace, paths: list[Path]) -> int:
+    """Sync these exports. Every command that syncs ends up here."""
+    if len(paths) == 1:
+        return _sync_one(args, paths[0])
+    return _sync_several(args, paths)
 
 
 def _sync_one(args: argparse.Namespace, path: Path) -> int:
@@ -633,6 +640,145 @@ def _sync_several(args: argparse.Namespace, paths: list[Path]) -> int:
     return 1 if failed else 0
 
 
+# --- exports straight from the Downloads folder -----------------------------------
+#
+# Finding the files is all that is new here. What is found goes to _sync_paths, the
+# same code that `sync FILE ...` runs, so there is one way of matching, reviewing and
+# writing, however the exports were named.
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _tilde(path: Path) -> str:
+    """A path as a person would write it: ~/Downloads rather than /Users/name/Downloads."""
+    try:
+        return f"~/{path.resolve().relative_to(Path.home().resolve())}"
+    except ValueError:
+        return str(path)
+
+
+def _when(moment: datetime, by_file_time: bool, now: datetime) -> str:
+    """ "exported 9:15 AM", with the day when it was not today; "saved" for a file's own time."""
+    local, today = moment.astimezone(), now.astimezone().date()
+    clock = f"{local.hour % 12 or 12}:{local.minute:02d} {'AM' if local.hour < 12 else 'PM'}"
+    if local.date() == today:
+        day = ""
+    elif local.date() == today - timedelta(days=1):
+        day = "yesterday, "
+    else:
+        day = f"{local.strftime('%b')} {local.day}, "
+    return f"{'saved' if by_file_time else 'exported'} {day}{clock}"
+
+
+def _export_rows(exports: list[FoundExport], now: datetime, indent: str = "") -> str:
+    names = max(len(export.playlist_name) for export in exports)
+    files = max(len(export.path.name) for export in exports)
+    return "\n".join(
+        f"{indent}{export.playlist_name:<{names}}   {export.path.name:<{files}}   "
+        f"{_when(export.when, export.by_file_time, now)}"
+        for export in exports
+    )
+
+
+def _hours(hours: float) -> str:
+    return _plural(int(hours), "hour") if float(hours).is_integer() else f"{hours:g} hours"
+
+
+def _describe_discovery(found: Discovery, details: bool, now: datetime) -> list[str]:
+    """Which exports will be used, and which will not and why, as paragraphs."""
+    where = _tilde(found.directory)
+    parts = []
+    if found.selected:
+        count = len(found.selected)
+        using = f"Using {'the latest export' if count == 1 else f'{count} latest exports'}."
+        if found.older:
+            using += f"\nIgnored {_plural(len(found.older), 'older export')}."
+        parts += [f"Daily Mix exports found in {where}:", _export_rows(found.selected, now), using]
+    if details and found.older:
+        parts += ["Older exports, not used:", _export_rows(found.older, now, indent="  ")]
+    if found.stale:
+        which = "it" if len(found.stale) == 1 else "them"
+        parts += [
+            f"Not used, because older than {_hours(found.max_age_hours)}:",
+            _export_rows(found.stale, now),
+            f"Export {which} again, or allow older exports with --max-age HOURS.",
+        ]
+    if found.broken:
+        parts.append("Cannot be used:")
+        for item, good in found.broken:
+            if good is None:
+                advice = "  Export that Daily Mix again, or delete the damaged file."
+            else:
+                what = f"of {item.playlist_name}" if item.playlist_name else "it seems"
+                advice = (
+                    f"  It is the newest export {what}. The one before it, {good.path.name} "
+                    f"({_when(good.when, good.by_file_time, now)}),\n"
+                    "  is not used in its place, since it may be out of date.\n"
+                    f"  Export {good.playlist_name} again, or delete the damaged file."
+                )
+            parts.append(f"{item.path.name}: {item.reason}\n{advice}")
+    if details:
+        if found.older_broken:
+            names = ", ".join(item.path.name for item in found.older_broken)
+            parts.append(
+                f"Damaged exports that no longer matter, as newer ones exist or they are old: {names}"
+            )
+        parts.append(f"Other JSON files in {where}, passed over: {found.unrelated}")
+    return parts
+
+
+def _cmd_sync_downloads(args: argparse.Namespace) -> int:
+    """Sync the newest export of each Daily Mix found in the Downloads folder."""
+    settings = load_settings(args.config)
+    if args.destination is not None:
+        print(
+            "error: --into is not available with sync-downloads, which sends each export it "
+            "finds to the playlist named after it. To choose a playlist, use: "
+            "sync FILE --into NAME",
+            file=sys.stderr,
+        )
+        return 1
+    directory = (args.downloads_dir or settings.downloads_dir).expanduser()
+    max_age = args.max_age if args.max_age is not None else settings.export_max_age_hours
+    now = _now()
+    try:
+        found = discover(directory, settings.managed_playlist_prefix, max_age, now)
+    except DownloadsError as error:
+        print(f"error: {error}", file=sys.stderr)
+        print(
+            "If macOS has not allowed this program to read that folder, allow it under System "
+            "Settings → Privacy & Security → Files and Folders, or name another folder with "
+            "--downloads-dir.",
+            file=sys.stderr,
+        )
+        return 1
+
+    parts = _describe_discovery(found, args.details, now)
+    if not found.selected:
+        parts += [
+            f"No recent Daily Mix exports found in {_tilde(found.directory)}.",
+            "Export one or more Daily Mixes with the Chrome extension, then run this command again.",
+        ]
+    print("\n\n".join(parts))
+    if not found.selected:
+        return 1
+    if args.list:
+        return 1 if found.broken else 0
+
+    print()
+    code = _sync_paths(args, found.paths)
+    if found.broken:
+        print(
+            f"\nerror: {_plural(len(found.broken), 'export')} in {_tilde(found.directory)} could "
+            "not be used; see the top of this output.",
+            file=sys.stderr,
+        )
+        return code or 1
+    return code
+
+
 # --- Music app commands: for trying the Music integration on its own ----------
 
 
@@ -766,6 +912,35 @@ def _cmd_music_clear_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def _positive_hours(text: str) -> float:
+    try:
+        hours = float(text)
+    except ValueError:
+        hours = 0
+    if not hours > 0 or hours == float("inf"):
+        raise argparse.ArgumentTypeError(f"expected a number of hours greater than 0, got {text!r}")
+    return hours
+
+
+def _add_sync_options(command: argparse.ArgumentParser) -> None:
+    """The options every command that syncs has."""
+    command.add_argument(
+        "--dry-run", action="store_true",
+        help="match and report, but do not create or change any playlist",
+    )
+    command.add_argument(
+        "--yes", action="store_true", help="replace the playlists' contents without asking"
+    )
+    command.add_argument(
+        "--no-review", action="store_true",
+        help="do not ask about tracks that need review; leave them out",
+    )
+    command.add_argument("--db", type=Path, metavar="FILE", help="mapping database")
+    command.add_argument(
+        "--details", action="store_true", help="also list every matched track and its choice"
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -826,27 +1001,37 @@ def _build_parser() -> argparse.ArgumentParser:
         help="playlist export (JSON). Several can be given: each goes to its own playlist, "
         "and all are matched before any playlist is changed",
     )
-    sync.add_argument(
-        "--dry-run", action="store_true",
-        help="match and report, but do not create or change any playlist",
-    )
-    sync.add_argument(
-        "--yes", action="store_true", help="replace the playlists' contents without asking"
-    )
-    sync.add_argument(
-        "--no-review", action="store_true",
-        help="do not ask about tracks that need review; leave them out",
-    )
+    _add_sync_options(sync)
     sync.add_argument(
         "--into", dest="destination", metavar="NAME",
         help="write to this managed playlist instead of the one named after the export "
         "(with one export only)",
     )
-    sync.add_argument("--db", type=Path, metavar="FILE", help="mapping database")
-    sync.add_argument(
-        "--details", action="store_true", help="also list every matched track and its choice"
-    )
     sync.set_defaults(handler=_cmd_sync)
+
+    downloads = commands.add_parser(
+        "sync-downloads", parents=[common],
+        help="sync the newest export of each Daily Mix found in your Downloads folder; "
+        "the files are read where they are and are not moved or deleted",
+    )
+    downloads.add_argument(
+        "--downloads-dir", type=Path, metavar="PATH",
+        help="folder to look in (default: downloads_dir from the settings, ~/Downloads)",
+    )
+    downloads.add_argument(
+        "--max-age", type=_positive_hours, metavar="HOURS",
+        help="use exports up to this many hours old (default: export_max_age_hours from "
+        "the settings, 24); older ones are left out and listed",
+    )
+    downloads.add_argument(
+        "--list", action="store_true",
+        help="show which exports would be used and stop; nothing is matched and Music is "
+        "not touched",
+    )
+    _add_sync_options(downloads)
+    # Accepted only so that it can be turned down with an explanation.
+    downloads.add_argument("--into", dest="destination", metavar="NAME", help=argparse.SUPPRESS)
+    downloads.set_defaults(handler=_cmd_sync_downloads)
 
     music_test = commands.add_parser(
         "music-test", parents=[common], help="check that the Music app can be reached"

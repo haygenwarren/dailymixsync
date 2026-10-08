@@ -39,6 +39,18 @@ def test_the_title_search_can_be_turned_off_in_the_config(tmp_path):
     assert load_settings(write(tmp_path, {"title_search_limit": 0})).title_search_limit == 0
 
 
+def test_downloads_settings_default_to_the_home_downloads_folder_and_a_day():
+    settings = Settings()
+    assert str(settings.downloads_dir) == "~/Downloads", "resolved from the home folder when used"
+    assert settings.export_max_age_hours == 24
+
+
+def test_downloads_settings_can_be_changed(tmp_path):
+    settings = load_settings(write(tmp_path, {"downloads_dir": "/Volumes/Big/Saved", "export_max_age_hours": 36.5}))
+    assert str(settings.downloads_dir) == "/Volumes/Big/Saved"
+    assert settings.export_max_age_hours == 36.5
+
+
 def test_the_default_depths_are_the_measured_ones():
     # Chosen from a measurement over a real library; see the comment in config.py.
     assert (Settings().search_limit, Settings().title_search_limit) == (60, 25)
@@ -89,6 +101,12 @@ def test_missing_explicit_config_file(tmp_path):
         ({"matching": {"flag_penalties": {"liev": 1}}}, "unknown flag_penalties keys"),
         ({"search_limit": 0}, "search_limit must be"),
         ({"search_limit": "ten"}, "search_limit must be"),
+        ({"downloads_dir": ""}, "downloads_dir must be"),
+        ({"downloads_dir": 7}, "downloads_dir must be"),
+        ({"export_max_age_hours": 0}, "export_max_age_hours must be"),
+        ({"export_max_age_hours": -24}, "export_max_age_hours must be"),
+        ({"export_max_age_hours": "a day"}, "export_max_age_hours must be"),
+        ({"export_max_age_hours": True}, "export_max_age_hours must be"),
         ({"title_search_limit": -1}, "title_search_limit must be"),
         ({"title_search_limit": "deep"}, "title_search_limit must be"),
         ({"title_search_limit": True}, "title_search_limit must be"),

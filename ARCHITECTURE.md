@@ -17,6 +17,9 @@ added to the library, and Music is reached through AppleScript alone.
 Spotify web player                extension/      read the page, scroll, collect by position
         │                         (Chrome)        → download daily_mix_1.json
         ▼
+Downloads folder                  downloads.py    sync-downloads: the newest recent export of
+        │                                         each mix (or name the files: sync FILE ...)
+        ▼
 playlist export (JSON)            importer.py     validate, drop duplicates
         │
         ▼
@@ -74,6 +77,7 @@ Still to do: the Spotify extractor.
 | `importer.py` | Load and validate a playlist export | models, normalize |
 | `config.py` | `Settings` from defaults plus optional JSON file | matcher, music_app |
 | `sync.py` | The matching loop, destination naming, and the playlist write with verification and restore | all of the above |
+| `downloads.py` | Finding exports in the Downloads folder: which files are exports, the newest per playlist, which are too old or damaged. Reads files only | importer, sync |
 | `cli.py` | The supported commands and their output; registers the experimental ones | all of the above |
 
 Experimental, off the main path (see
@@ -164,6 +168,55 @@ brings such results up to date after the review, without searching.
 
 **A mix with nothing in the library** is left out of the writing step altogether, so
 its playlist is not emptied and, if it does not exist yet, not created.
+
+## Exports from the Downloads folder
+
+`sync-downloads` removes one manual step, moving files from Downloads into `data/`,
+and adds no moving part to do it. There is no link between the browser and Python: the
+extension saves a file as before, and later, when the command is run, `downloads.py`
+looks at what is in the folder.
+
+```
+every *.json directly in the folder
+  -> one of ours?                 judged by contents: a name, tracks, Spotify's marks,
+                                  and the importer's acceptance
+  -> destination playlist         the same destination_name() as everywhere else
+  -> newest per destination       exported_at when believable, else the file's time
+  -> recent enough?               older than the limit: left out, and named
+  -> the selected paths go to cli._sync_paths, which is what `sync FILE ...` calls
+```
+
+Everything after the last line is the existing code. The command has no matching,
+review or writing of its own, and a test hands both commands' paths to the same
+function to keep it that way.
+
+**Three kinds of file.** An export; an unrelated file, passed over, as Downloads is
+full of them; and a damaged export, recognisable as ours (valid JSON with our outline
+that the importer rejects, or text that starts the way our files start) but unusable.
+The third kind exists because of one failure worth designing against: the newest
+export of a mix is damaged, an older good one is in the folder, and the tool quietly
+syncs the older one. So a damaged export that is the newest of its playlist takes that
+playlist out of the run, and the run ends with a nonzero status even if every other
+playlist was synced. When the damaged file cannot say which playlist it was for, its
+file name is compared with the name the extension would have given each playlist.
+
+**Why contents and not names.** Names are what a browser changes: a second download
+becomes `daily_mix_1 (1).json`. The contents say which playlist an export is and when
+it was made. The copy number is used for one thing only, as the last tie-break between
+two exports with the very same time.
+
+**Why an age limit.** Reading from a folder that is never emptied means last month's
+export is still there next month. Picking the newest per playlist handles a mix
+exported twice today; the age limit handles a mix not exported today at all, which
+would otherwise be synced from whatever old file is lying around.
+
+**What it must never do** is change the folder. `downloads.py` imports nothing that
+could, and a test checks its syntax tree for file-changing calls and for any import
+beyond the standard library's readers, the importer and destination naming.
+
+**An export without a playlist name** is treated as damaged here, although the
+importer accepts it by falling back to the file's name. Named after its file, it
+would create a playlist called after `daily_mix_1 (1)`.
 
 ## Spotify export extension
 
@@ -594,6 +647,11 @@ All numbers are fields of `MatchConfig` and can be overridden in `config.json`.
   playlist fails in various ways and the others must come out right. The stand-in
   Music can be told to fail the n-th time a given script is sent, which is how a
   failure is placed in the second or the last playlist of a batch.
+- **`tests/test_downloads.py`** and **`tests/test_cli_sync_downloads.py`** cover
+  finding exports: what counts as one, the newest per playlist by export time and by
+  file time, browser copy names, old exports, damaged ones, and that the folder is
+  left byte for byte as it was. They use temporary folders and a pinned clock and time
+  zone; the real Downloads folder is never read by a test.
 - **Live tests** (`tests/integration/`, marker `music_app`) drive the real app through
   AppleScript and run only with `pytest --music-app`. They change `Spotify Daily Mix
   TEST`, including a full library-only `sync` into it, and, for a sync of two exports,

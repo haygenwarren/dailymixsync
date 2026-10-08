@@ -30,6 +30,7 @@ MusicKit, no API key or token, and no hosted service.
 | --- | --- |
 | Matching against your Music library, with cache and manual review | Working, tested against the real app |
 | Library-only playlist sync: write, verify, roll back on failure | Working, tested against the real app |
+| Several mixes in one command, and straight from the Downloads folder | Working, tested against the real app |
 | Spotify export, a Chrome extension in [`extension/`](extension/README.md) | Working. Tested in a real Chrome against the real site on public playlists, and used on one real Daily Mix; see [what was verified](#what-was-verified-against-spotify) |
 | Adding songs you do not have, from the Apple Music catalog | Not part of sync. Kept as [experimental commands](#experimental-apple-music-catalog-support) only |
 
@@ -61,58 +62,64 @@ library, and Music is driven with the `osascript` command that ships with macOS.
 
 ## From Spotify to Apple Music
 
-The whole path, once the extension is loaded
+Once the extension is loaded
 ([how to load it](extension/README.md#install): `chrome://extensions` → Developer
-mode → Load unpacked → the `extension/` folder).
+mode → Load unpacked → the `extension/` folder), the everyday routine is this:
 
-1. **Open a Daily Mix** in the Spotify web player, <https://open.spotify.com>.
-2. **Export it.** Click the extension's button, then **Export this playlist**. It
-   reads every track and downloads a file named after the playlist, such as
-   `daily_mix_1.json`.
-3. **Move the file into `data/`**, which is git-ignored:
-
-   ```sh
-   mv ~/Downloads/daily_mix_1.json data/
-   ```
-
-4. **Validate it.** This reads the file and touches nothing else:
+1. **Export each Daily Mix from Spotify.** Open a mix in the Spotify web player,
+   <https://open.spotify.com>, click the extension's button, then **Export this
+   playlist**. A file named after the mix, such as `daily_mix_1.json`, lands in your
+   Downloads folder. Repeat for the mixes you want.
+2. **See what would happen.** Nothing in Music is created or changed:
 
    ```sh
-   python -m daily_mix_sync validate data/daily_mix_1.json
+   python -m daily_mix_sync sync-downloads --dry-run
    ```
 
-5. **Dry run.** See which songs are in your library and what the playlist would hold.
-   Nothing in Music is created or changed:
+3. **Sync.**
 
    ```sh
-   python -m daily_mix_sync sync data/daily_mix_1.json --dry-run
+   python -m daily_mix_sync sync-downloads
    ```
 
-6. **Sync.**
+That is all. There is no file to move and nothing to edit by hand.
 
-   ```sh
-   python -m daily_mix_sync sync data/daily_mix_1.json
-   ```
+- **The newest export of each mix is used.** If you exported Daily Mix 1 twice, the
+  later one is synced and the earlier one is ignored.
+- **Old exports are left out.** By default only exports from the last 24 hours are
+  used, so a file forgotten in Downloads is not synced weeks later. Anything left out
+  for that reason is named.
+- **The files stay in Downloads.** They are read where they are, and never moved or
+  deleted. Clearing them out now and then is up to you.
+- **The sync stays library-only.** Each playlist, such as `Spotify Daily Mix 1`, gets
+  the songs of its mix that are already in your Apple Music library; the rest are
+  listed and left out. Nothing is added to your library.
 
-The export is used as it comes out of the extension; there is nothing to edit by hand.
-The sync stays **library-only**: the playlist `Spotify Daily Mix 1` gets the songs of
-the mix that are already in your Apple Music library, and the rest are listed and left
-out.
+`sync-downloads` first shows which exports it picked, then does exactly what `sync`
+does with several files: everything is matched before any playlist is changed, and you
+are asked once for the whole lot. See
+[Syncing straight from Downloads](#syncing-straight-from-downloads).
 
-**All your mixes at once.** Export each Daily Mix (steps 1 to 3), then give them all to
-one command:
+The extension only reads the Spotify page and saves a file, as any web page can. It
+does not start a sync, run Python, or talk to Music. Nothing runs in the background;
+the two halves meet in the JSON file and nowhere else.
+
+### Naming the files yourself
+
+`sync-downloads` is a convenience. The explicit form is still there, and is the one to
+use when you want to keep exports, look inside them, or sort out a problem:
 
 ```sh
-python -m daily_mix_sync sync data/daily_mix_*.json --dry-run
-python -m daily_mix_sync sync data/daily_mix_*.json
+mv ~/Downloads/daily_mix_1.json data/                             # data/ is git-ignored
+python -m daily_mix_sync validate data/daily_mix_1.json           # reads the file, touches nothing else
+python -m daily_mix_sync sync data/daily_mix_1.json --dry-run     # nothing in Music is changed
+python -m daily_mix_sync sync data/daily_mix_1.json
+
+python -m daily_mix_sync sync data/daily_mix_*.json               # or all of them at once
 ```
 
-Each export goes to its own playlist, everything is matched before any playlist is
-changed, and you are asked once for the whole lot. See
+See [Syncing a playlist](#syncing-a-playlist) and
 [Several mixes at once](#several-mixes-at-once).
-
-The extension only reads the Spotify page. It does not start a sync, run Python, or
-talk to Music; the two halves meet in the JSON file and nowhere else.
 
 ## Try it offline
 
@@ -350,6 +357,95 @@ refused and both files are named. The later one never silently overwrites the ea
 | 1 | A problem before writing, not confirmed, no mix had any song in the library, or at least one playlist failed to write. |
 | 130 | Interrupted. |
 
+### Syncing straight from Downloads
+
+```sh
+python -m daily_mix_sync sync-downloads --list       # which exports would be used; Music is not touched
+python -m daily_mix_sync sync-downloads --dry-run    # match and report; nothing in Music is changed
+python -m daily_mix_sync sync-downloads              # sync them
+```
+
+`sync-downloads` looks in your Downloads folder for exports made by the extension,
+picks the ones to use, shows you which, and hands them to the same code that
+`sync FILE ...` runs. From that point on there is no difference between the two
+commands: the same matching, review, single confirmation, writing and summary.
+
+```
+Daily Mix exports found in ~/Downloads:
+
+Daily Mix 1   daily_mix_1 (1).json   exported 9:15 AM
+Daily Mix 2   daily_mix_2.json       exported 9:16 AM
+Daily Mix 4   daily_mix_4.json       exported 9:18 AM
+
+Using 3 latest exports.
+Ignored 1 older export.
+```
+
+**Which files count as exports.** Every `.json` file in the folder itself (not in
+folders inside it) is looked at, and judged by what is in it, not by its name. It is
+an export if it is valid JSON with a playlist name and a list of tracks, the importer
+accepts it, and it carries Spotify's marks: the playlist's address on
+`open.spotify.com`, or Spotify IDs on its tracks. Any other JSON file in Downloads is
+passed over without comment. `--details` says how many there were.
+
+**Which export of a mix is used: the newest.** Each export's destination playlist is
+worked out the usual way, and for each destination exactly one export is kept. Newest
+means:
+
+1. by the `exported_at` time the extension writes into the file, when it is there and
+   believable (a proper time with a time zone, and not more than a few minutes ahead
+   of this Mac's clock);
+2. otherwise by the file's own modification time, shown as "saved" instead of
+   "exported".
+
+The number a browser adds to a repeated download, as in `daily_mix_1 (1).json`, plays
+no part unless two exports carry the very same time. Older copies are counted
+("Ignored 1 older export") and listed with `--details`. They are not a clash: that
+rule is for files you name yourself with `sync`, where two exports for one playlist
+are still refused.
+
+**Old exports are not used.** If the newest export of a mix is more than 24 hours
+old, that mix is left out and named, with the time of its export:
+
+```
+Not used, because older than 24 hours:
+
+Daily Mix 3   daily_mix_3.json   exported Oct 5, 8:02 AM
+
+Export it again, or allow older exports with --max-age HOURS.
+```
+
+The other mixes are synced as usual. `--max-age 48` allows two days;
+`export_max_age_hours` in the settings changes the default.
+
+**Damaged exports are never skipped in silence.** A file that is recognisably one of
+these exports but cannot be used (cut off part-way, no usable track, no playlist name)
+is reported. If it is the newest export of its mix, that mix is left out of the run
+altogether; the export before it is deliberately **not** used in its place, because
+that would put an out-of-date mix in your playlist without your knowing. The other
+mixes are still synced, and the exit code is 1. A damaged file that a newer good
+export has replaced, or one older than the age limit, does no harm and is mentioned
+only with `--details`.
+
+**Nothing found.** With no recent export in the folder, the command says so, tells you
+to export a mix, and exits with code 1. Music is not contacted.
+
+**The files are only read.** Nothing in Downloads is moved, renamed or deleted, by
+this command or any other.
+
+| Option | Meaning |
+| --- | --- |
+| `--downloads-dir PATH` | Look in this folder. Default: `downloads_dir` from the settings, `~/Downloads`. |
+| `--max-age HOURS` | Use exports up to this old. Default: `export_max_age_hours` from the settings, 24. |
+| `--list` | Show which exports would be used and stop. Nothing is matched; Music is not contacted. |
+| `--dry-run`, `--yes`, `--no-review`, `--db FILE`, `--details` | As for `sync`. `--details` also lists the older copies and the files passed over. |
+
+There is no `--into` here: the command sends each export to the playlist named after
+it. To send one export somewhere else, use `sync FILE --into NAME`.
+
+Exit codes are those of `sync`, with two additions: 1 when no recent export is found,
+and 1 when a damaged export kept a mix out, even if every other mix was synced.
+
 ## Reviewing ambiguous songs
 
 A song is ambiguous when its best candidate scores between the review threshold (75)
@@ -513,6 +609,8 @@ cp config.example.json config.json    # config.json is git-ignored
 | `search_limit` | 60 | How many results are taken from the first library search, by title and artist. |
 | `title_search_limit` | 25 | How many are taken from the second search, by title alone, made only when the first gives no match. `0` turns it off. See [How library search behaves](#how-library-search-behaves). |
 | `managed_playlist_prefix` | `Spotify Daily Mix` | The only playlists the tool may change; see [Playlist safety](#playlist-safety). |
+| `downloads_dir` | `~/Downloads` | Where `sync-downloads` looks for exports. `~` is your home folder. |
+| `export_max_age_hours` | 24 | `sync-downloads` leaves out exports older than this, and says so. |
 | `catalog_wait_s` | 30 | Experimental catalog commands only: how long to wait for an added song to show up in the library. Not used by `sync`. |
 | `matching.auto_accept_threshold` | 90 | Accept automatically at or above this score. |
 | `matching.review_threshold` | 75 | Offer for review at or above this score. |
@@ -568,10 +666,11 @@ upgraded in place the first time it is opened.
 python -m pytest
 ```
 
-767 tests: normalization, scoring, the SQLite store, input validation, config, the
+909 tests: normalization, scoring, the SQLite store, input validation, config, the
 mock catalog, cache validation, manual review, playlist writing with verification and
-rollback, the CLI, syncing several exports in one run, the Music adapter, the two-step
-library search, and reading the extension's export. Everything that would talk to Music runs against an in-memory
+rollback, the CLI, syncing several exports in one run, finding exports in a Downloads
+folder, the Music adapter, the two-step library search, and reading the extension's
+export. Everything that would talk to Music runs against an in-memory
 stand-in for `osascript` (`tests/fake_music.py`), which can be told to fail at a
 chosen point and which, like Music, answers a search in library order. One file,
 `tests/test_search_recall.py`, covers how candidates are found and, above all, that
@@ -592,10 +691,12 @@ AppleScript and are skipped unless you ask for them:
 python -m pytest tests/integration --music-app
 ```
 
-33 tests, about two minutes. Twenty of them read your library and change exactly one
+36 tests, about two minutes. Twenty of them read your library and change exactly one
 playlist, `Spotify Daily Mix TEST`, including a complete `sync` into it from a
-generated export. Seven more sync two exports in one run, into
-`Spotify Daily Mix TEST 1` and `Spotify Daily Mix TEST 2` and nowhere else. Afterwards
+generated export. Ten more sync two exports in one run, named outright or found by
+`sync-downloads` in a temporary folder made for the test, into
+`Spotify Daily Mix TEST 1` and `Spotify Daily Mix TEST 2` and nowhere else. Your real
+Downloads folder is not read by any test. Afterwards
 the contents of all three are put back exactly as they were found, and the tests check
 that your library size and every other playlist are unchanged. They use a temporary
 mapping database, so your real cache is not touched. They never delete a test
@@ -610,7 +711,7 @@ change nothing at all, not even the test playlist. To run just those:
 python -m pytest tests/integration/test_search_live.py --music-app
 ```
 
-The experimental catalog code has its own unit tests, included in the 767, and its
+The experimental catalog code has its own unit tests, included in the 909, and its
 own live switch; see [the experimental section](#experimental-apple-music-catalog-support).
 
 **The browser extension** has its own tests, in JavaScript, run with Node:
@@ -853,8 +954,15 @@ The `music-*` commands and the live tests only ever use `Spotify Daily Mix TEST`
 macOS asks before one app may control another. The permission belongs to the app you
 run the tool **from**: Terminal, iTerm, Visual Studio Code, and so on.
 
-`validate` needs no permission at all. `match`, `review`, `sync` and the `music-*`
-commands need exactly one: **Automation**, to control Music.
+`validate` needs no permission at all. `match`, `review`, `sync`, `sync-downloads` and
+the `music-*` commands need exactly one: **Automation**, to control Music.
+
+`sync-downloads` also reads your Downloads folder. macOS may ask once whether the app
+you run the tool from may access files in Downloads; choose **Allow**. If it was
+refused, the command stops with "cannot read … Operation not permitted". Allow it
+under **System Settings → Privacy & Security → Files and Folders**, or point the
+command at another folder with `--downloads-dir`. On the Mac this was developed on,
+no prompt appeared and the folder could simply be read.
 
 The first time the tool talks to Music, macOS shows a prompt along the lines of
 "Terminal wants access to control Music". Choose **Allow**.
@@ -890,8 +998,13 @@ you granted it earlier and do not use those commands, you can switch it off agai
   [extension README](extension/README.md#known-limits): local files and podcast
   episodes are left out, durations are whole seconds, and it has been used on one real
   Daily Mix so far.
-- Each Daily Mix is exported by hand, one click per playlist; one command then syncs
-  them all. Nothing runs on a schedule, and the browser does not start the sync.
+- Each Daily Mix is exported by hand, one click per playlist; one command,
+  `sync-downloads`, then finds the exports and syncs them all. Nothing runs on a
+  schedule, and the browser does not start the sync.
+- `sync-downloads` never tidies up. Exports stay in Downloads until you remove them;
+  the age limit is what keeps old ones from being used.
+- `sync-downloads` looks only at files directly in the folder, and only at names ending
+  in `.json`.
 - In a sync of several exports, a track you skip in review is not asked about again
   for the other mixes in that run, but it will be the next time.
 - A song with a very common one-word title can still go unfound if it is neither
@@ -995,9 +1108,11 @@ can affect `sync`, which does not use the window.
    and an artist credited differently (Jimi Hendrix on Spotify, The Jimi Hendrix
    Experience in the library, 89.0). These are scoring questions, not search ones, and
    should be decided on real cases, not by moving a threshold.
-2. **Run the whole routine for a week.** Export every Daily Mix, sync them all with one
-   command, and note what gets in the way. That is the best guide to what, if
-   anything, should be made easier next.
-3. **A shorter path from browser to sync.** Today each mix is exported with a click and
-   the files are moved into `data/` by hand. Whether that step is worth automating, and
-   how, is better decided after some real use.
+2. **Run the whole routine for a week.** Export every Daily Mix, run `sync-downloads`,
+   and note what gets in the way. That is the best guide to what, if anything, should
+   be made easier next.
+3. **Small things, only if they prove annoying.** The extension's popup still suggests
+   moving the file into `data/`, which is no longer needed; its wording could point to
+   `sync-downloads` instead. Old exports pile up in Downloads; an option to archive
+   the ones that were used is possible, but nothing here moves or deletes your files
+   today, and that is a good default to keep.

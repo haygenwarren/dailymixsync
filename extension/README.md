@@ -32,7 +32,16 @@ Only Google Chrome has been tried.
    and last song so you can compare them with the page. The file is in Chrome's
    download folder.
 
-Then, from the repository root:
+Then, from the repository root, sync whatever you exported. The files are found in
+your Downloads folder and read where they are; nothing has to be moved:
+
+```sh
+python -m daily_mix_sync sync-downloads --dry-run
+python -m daily_mix_sync sync-downloads
+```
+
+The popup's own hint still says to move the file into `data/`. That also works, and is
+the way to keep an export or look inside it:
 
 ```sh
 mv ~/Downloads/daily_mix_1.json data/

@@ -23,7 +23,7 @@ SRC = Path(cli.__file__).parent
 # Everything a normal sync runs through. None of it may know about the experimental side.
 MAIN_PATH = [
     "sync.py", "matcher.py", "review.py", "importer.py", "database.py", "normalize.py",
-    "models.py", "config.py", "music_app.py", "apple_music.py",
+    "models.py", "config.py", "music_app.py", "apple_music.py", "downloads.py",
 ]
 EXPERIMENTAL = {"music_ui", "catalog", "experimental"}
 
@@ -151,8 +151,8 @@ def test_every_command_that_reaches_the_window_says_experimental():
     assert all(name.startswith("experimental-") for name in uses_experimental)
     supported = set(choices) - uses_experimental
     assert supported == {
-        "validate", "match", "review", "sync", "music-test", "music-playlists", "music-find",
-        "music-add-test", "music-clear-test",
+        "validate", "match", "review", "sync", "sync-downloads", "music-test", "music-playlists",
+        "music-find", "music-add-test", "music-clear-test",
     }
 
 
@@ -231,6 +231,55 @@ def test_a_sync_of_several_exports_is_as_library_only_as_a_sync_of_one(
     assert fake.playlist("Spotify Liked Songs").track_ids == ["B1"]
     # Songs that are not in the library are left out of both, and that is not an error.
     assert out.count("Only songs already in your library are used. Nothing is added to it.") == 2
+
+
+@pytest.mark.parametrize("options", [("--list",), ("--dry-run",), ("--yes",)])
+def test_syncing_from_a_downloads_folder_is_as_library_only_as_any_sync(
+    fake, export, second_export, capsys, tmp_path, options
+):
+    """The tripwires in the fixture would raise if the window were touched."""
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    for path in (export, second_export):
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        (downloads / Path(path).name).write_text(json.dumps(data), encoding="utf-8")
+    library_before = dict(fake.library)
+    code, _, err = run(capsys, "sync-downloads", "--downloads-dir", str(downloads), *options)
+    assert (code, err) == (0, "")
+    assert fake.library == library_before  # nothing was added to the library
+    assert set(fake.scripts_sent()) <= set(fake._handlers)
+    for script in fake.scripts_sent():
+        assert "System Events" not in script
+        assert "Add to Library" not in script
+    changed = {args[0] if script is music_app._CREATE_PLAYLIST else args[1] for script, args in fake.changes()}
+    assert changed == ({DEST, "Spotify Daily Mix 2"} if options == ("--yes",) else set())
+    assert fake.playlist("Spotify Liked Songs").track_ids == ["B1"]
+    if options == ("--list",):
+        assert fake.calls == []  # listing does not reach Music at all
+
+
+def test_finding_exports_reads_files_and_nothing_else():
+    """downloads.py has no way to change a file, start a program or reach the network."""
+    tree = ast.parse((SRC / "downloads.py").read_text(encoding="utf-8"))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            imported.add(node.module if node.level == 0 else f".{node.module}")
+        elif isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+    assert imported == {
+        "__future__", "json", "logging", "re", "unicodedata", "dataclasses", "datetime", "pathlib",
+        ".importer", ".sync",
+    }, "no subprocess, no sockets, no shutil, and nothing that talks to Music"
+
+    changes_files = {
+        "unlink", "rename", "rmdir", "mkdir", "touch", "chmod", "write_text", "write_bytes",
+        "open", "symlink_to", "hardlink_to", "move", "copy", "remove",
+    }
+    used = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    used |= {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    assert not used & changes_files, sorted(used & changes_files)
+    assert {"read_bytes", "iterdir", "stat"} <= used, "it lists the folder and reads files"
 
 
 def test_sync_of_several_exports_still_has_no_catalog_option(fake, export, second_export, capsys):
